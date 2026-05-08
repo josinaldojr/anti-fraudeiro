@@ -1,49 +1,71 @@
+<a id="readme-top"></a>
+
 # anti-fraudeiro
 
-Bootstrap inicial em Go para a Rinha de Backend 2026, com foco em uma base correta, simples e pronta para evoluir. Nesta etapa o projeto já expõe a API pedida, vetoriza a transação em 14 dimensões, faz KNN brute force sobre `resources/example-references.json` e responde `approved` e `fraud_score`.
+Go backend for the [Rinha de Backend 2026](https://github.com/zanfranceschi/rinha-de-backend-2026), focused on fraud detection with vector search under the challenge resource constraints.
 
-## Objetivo
+## About The Project
 
-Construir uma solução enxuta para detecção de fraude com busca vetorial, priorizando:
+`anti-fraudeiro` is a lean HTTP service that receives a transaction payload, converts it to the official 14-dimensional feature vector, runs a KNN search against the challenge reference dataset, and returns:
 
-- corretude da regra da competição;
-- estrutura de código clara para otimizações futuras;
-- execução local simples;
-- conteinerização com `nginx` + 2 instâncias da API.
+```json
+{
+  "approved": true,
+  "fraud_score": 0
+}
+```
 
-## Estrutura
+The current implementation prioritizes correctness, simplicity, and a clean baseline for future optimization work. The search path uses:
+
+- `net/http`
+- `encoding/json`
+- brute-force KNN
+- squared Euclidean distance
+- fixed top-5 tracking without sorting the entire dataset
+
+### Built With
+
+- [Go](https://go.dev/)
+- `net/http`
+- Docker
+- Docker Compose
+- Nginx
+
+## Repository Layout
 
 ```text
-anti-fraudeiro/
-├── cmd/api/main.go
-├── internal/api/
-├── internal/config/
-├── internal/dataset/
-├── internal/fraud/
-├── resources/
-├── docker/nginx.conf
-├── Dockerfile
-├── docker-compose.yml
-├── info.json
-├── Makefile
-└── README.md
+cmd/
+  api/
+    main.go
+internal/
+  api/         HTTP handlers and router
+  config/      runtime configuration and resource loading
+  dataset/     reference dataset loader
+  fraud/       request models, vectorization, KNN and scoring
+resources/     challenge resources and local fallback dataset
+docker/        Nginx configuration
 ```
 
-## Como rodar localmente
+## Getting Started
 
-Pré-requisito: Go 1.25+.
+### Prerequisites
 
-```bash
-go run ./cmd/api
-```
+- Go 1.25+
+- Docker and Docker Compose
 
-Por padrão a API sobe na porta `9999` e carrega:
+### Resources
 
-- `resources/example-references.json`
-- `resources/mcc_risk.json`
-- `resources/normalization.json`
+The service expects the official challenge resource files under `resources/`:
 
-Variáveis úteis:
+- `references.json.gz`
+- `mcc_risk.json`
+- `normalization.json`
+
+For local development, the application falls back to `resources/example-references.json` when `resources/references.json.gz` is not present.
+
+### Configuration
+
+Environment variables:
 
 - `PORT`
 - `RESOURCE_DIR`
@@ -51,50 +73,48 @@ Variáveis úteis:
 - `MCC_RISK_PATH`
 - `NORMALIZATION_PATH`
 
-## Como rodar testes
+Default HTTP port is `9999`.
+
+## Usage
+
+### Run Locally
+
+```bash
+go run ./cmd/api
+```
+
+### Run Tests
 
 ```bash
 go test ./...
 ```
 
-Ou via Makefile:
-
-```bash
-make test
-```
-
-## Como subir com Docker Compose
+### Run With Docker Compose
 
 ```bash
 docker compose up --build
 ```
 
-Isso sobe:
+The stack exposes:
 
-- `nginx` escutando na porta `9999`;
-- `api1` na porta interna `8080`;
-- `api2` na porta interna `8080`.
+- `GET /ready`
+- `POST /fraud-score`
 
-Para derrubar:
+through:
 
-```bash
-docker compose down
+```text
+http://localhost:9999
 ```
 
-## Como testar /ready
+### Example Requests
+
+Ready endpoint:
 
 ```bash
 curl -i http://localhost:9999/ready
 ```
 
-Resposta esperada:
-
-```text
-HTTP/1.1 200 OK
-ok
-```
-
-## Como testar /fraud-score
+Fraud score endpoint:
 
 ```bash
 curl -i -X POST http://localhost:9999/fraud-score \
@@ -128,18 +148,9 @@ curl -i -X POST http://localhost:9999/fraud-score \
   }'
 ```
 
-Resposta esperada:
+## Development
 
-```json
-{
-  "approved": true,
-  "fraud_score": 0.0
-}
-```
-
-## Makefile
-
-Comandos disponíveis:
+Useful commands:
 
 - `make test`
 - `make run`
@@ -148,18 +159,21 @@ Comandos disponíveis:
 - `make curl-ready`
 - `make curl-fraud-score`
 
-## Próximos passos
+## Architecture Notes
 
-- trocar `example-references.json` pelo `references.json.gz` real;
-- gerar um formato binário compacto para carregar os vetores;
-- reduzir alocações e parsing no hot path;
-- avaliar quantização;
-- testar buckets por faixa e outras estratégias antes de ANN;
-- comparar brute force com alternativas como ANN quando a base real entrar.
+- The public port is `9999`, as required by the challenge.
+- The load balancer is Nginx and performs round-robin distribution only.
+- The application instances run behind the load balancer on port `8080`.
+- The dataset loader supports both plain JSON and `gzip`-compressed JSON.
+- The current reference store is kept in contiguous slices for lower overhead on the hot path.
 
-## Notas
+## Challenge References
 
-- A distância usada no KNN é euclidiana ao quadrado, sem `sqrt`.
-- O hot path mantém apenas os 5 melhores candidatos, sem ordenar o dataset inteiro.
-- Há espaço claro para otimizações futuras sem mudar a API pública.
+- [Official repository](https://github.com/zanfranceschi/rinha-de-backend-2026)
+- [API documentation](https://github.com/zanfranceschi/rinha-de-backend-2026/blob/main/docs/br/API.md)
+- [Detection rules](https://github.com/zanfranceschi/rinha-de-backend-2026/blob/main/docs/br/REGRAS_DE_DETECCAO.md)
+- [Dataset documentation](https://github.com/zanfranceschi/rinha-de-backend-2026/blob/main/docs/br/DATASET.md)
+- [Architecture constraints](https://github.com/zanfranceschi/rinha-de-backend-2026/blob/main/docs/br/ARQUITETURA.md)
+- [Submission rules](https://github.com/zanfranceschi/rinha-de-backend-2026/blob/main/docs/br/SUBMISSAO.md)
 
+<p align="right">(<a href="#readme-top">back to top</a>)</p>

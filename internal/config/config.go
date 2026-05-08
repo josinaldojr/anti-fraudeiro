@@ -27,10 +27,14 @@ type Normalization struct {
 
 func Load() Config {
 	resourceDir := envOrDefault("RESOURCE_DIR", "resources")
+	defaultReferencesPath := filepath.Join(resourceDir, "references.json.gz")
+	if _, err := os.Stat(defaultReferencesPath); err != nil {
+		defaultReferencesPath = filepath.Join(resourceDir, "example-references.json")
+	}
 
 	return Config{
 		HTTPPort:          envOrDefault("PORT", "9999"),
-		ReferencesPath:    envOrDefault("REFERENCES_PATH", filepath.Join(resourceDir, "example-references.json")),
+		ReferencesPath:    envOrDefault("REFERENCES_PATH", defaultReferencesPath),
 		MCCRiskPath:       envOrDefault("MCC_RISK_PATH", filepath.Join(resourceDir, "mcc_risk.json")),
 		NormalizationPath: envOrDefault("NORMALIZATION_PATH", filepath.Join(resourceDir, "normalization.json")),
 	}
