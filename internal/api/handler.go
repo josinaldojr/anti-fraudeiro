@@ -2,10 +2,14 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 
 	"github.com/josinaldojr/anti-fraudeiro/internal/fraud"
 )
+
+const maxFraudScoreRequestBodyBytes int64 = 16 * 1024
 
 type Handler struct {
 	scorer *fraud.Scorer
@@ -30,13 +34,14 @@ func (h *Handler) FraudScore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	defer r.Body.Close()
+	request, err := decodeFraudScoreRequest(w, r)
+	if err != nil {
+		var maxBytesError *http.MaxBytesError
+		if errors.As(err, &maxBytesError) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, ErrorResponse{Error: "request payload too large"})
+			return
+		}
 
-	var request fraud.FraudScoreRequest
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-
-	if err := decoder.Decode(&request); err != nil {
 		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid request payload"})
 		return
 	}
@@ -51,4 +56,29 @@ func (h *Handler) FraudScore(w http.ResponseWriter, r *http.Request) {
 		Approved:   decision.Approved,
 		FraudScore: decision.FraudScore,
 	})
+}
+
+func decodeFraudScoreRequest(w http.ResponseWriter, r *http.Request) (fraud.FraudScoreRequest, error) {
+	defer r.Body.Close()
+
+	limitedBody := http.MaxBytesReader(w, r.Body, maxFraudScoreRequestBodyBytes)
+	defer limitedBody.Close()
+
+	var request fraud.FraudScoreRequest
+	decoder := json.NewDecoder(limitedBody)
+	decoder.DisallowUnknownFields()
+
+	if err := decoder.Decode(&request); err != nil {
+		return fraud.FraudScoreRequest{}, err
+	}
+
+	var trailing json.RawMessage
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return fraud.FraudScoreRequest{}, errors.New("trailing json payload")
+		}
+		return fraud.FraudScoreRequest{}, err
+	}
+
+	return request, nil
 }
