@@ -1,9 +1,13 @@
 package dataset
 
 const (
-	VectorSize = 14
-	LabelLegit = byte(0)
-	LabelFraud = byte(1)
+	VectorSize              = 14
+	LabelLegit              = byte(0)
+	LabelFraud              = byte(1)
+	BinaryFormatVersion     = uint32(2)
+	BinaryReferenceFile     = "references.bin"
+	CompressedReferenceFile = "references.json.gz"
+	ExampleReferenceFile    = "example-references.json"
 )
 
 type ReferenceRecord struct {

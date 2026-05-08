@@ -5,3 +5,4 @@ dist/
 .gomodcache/
 .tmp/
 *.exe
+resources/references.bin

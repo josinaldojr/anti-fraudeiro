@@ -1,7 +1,9 @@
 package dataset
 
 import (
+	"bufio"
 	"compress/gzip"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,28 +12,18 @@ import (
 )
 
 func LoadVectorStore(path string) (*VectorStore, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("open references file: %w", err)
+	if filepath.Ext(path) == ".bin" {
+		return LoadBinaryVectorStore(path)
 	}
-	defer file.Close()
 
-	reader, closeReader, err := openDatasetReader(file, path)
+	decoder, closeDecoder, err := openDatasetDecoder(path)
 	if err != nil {
 		return nil, err
 	}
-	defer closeReader()
+	defer closeDecoder()
 
-	decoder := json.NewDecoder(reader)
-
-	startToken, err := decoder.Token()
-	if err != nil {
-		return nil, fmt.Errorf("read references array start: %w", err)
-	}
-
-	delimiter, ok := startToken.(json.Delim)
-	if !ok || delimiter != '[' {
-		return nil, fmt.Errorf("references file must contain a JSON array")
+	if err := expectJSONArrayStart(decoder); err != nil {
+		return nil, err
 	}
 
 	vectors := make([]float32, 0, 1024*VectorSize)
@@ -50,26 +42,17 @@ func LoadVectorStore(path string) (*VectorStore, error) {
 
 		vectors = append(vectors, record.Vector...)
 
-		switch record.Label {
-		case "legit":
-			labels = append(labels, LabelLegit)
-		case "fraud":
-			labels = append(labels, LabelFraud)
-		default:
-			return nil, fmt.Errorf("record %d has unknown label %q", recordIndex, record.Label)
+		label, err := parseLabel(record.Label)
+		if err != nil {
+			return nil, fmt.Errorf("record %d %w", recordIndex, err)
 		}
+		labels = append(labels, label)
 
 		recordIndex++
 	}
 
-	endToken, err := decoder.Token()
-	if err != nil {
-		return nil, fmt.Errorf("read references array end: %w", err)
-	}
-
-	delimiter, ok = endToken.(json.Delim)
-	if !ok || delimiter != ']' {
-		return nil, fmt.Errorf("references file has invalid JSON array ending")
+	if err := expectJSONArrayEnd(decoder); err != nil {
+		return nil, err
 	}
 
 	return &VectorStore{
@@ -77,6 +60,153 @@ func LoadVectorStore(path string) (*VectorStore, error) {
 		Labels:  labels,
 		Count:   recordIndex,
 	}, nil
+}
+
+func LoadBinaryVectorStore(path string) (*VectorStore, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open binary references file: %w", err)
+	}
+	defer file.Close()
+
+	reader := bufio.NewReader(file)
+
+	header, err := readBinaryHeader(reader)
+	if err != nil {
+		return nil, err
+	}
+
+	count := int(header.Count)
+	vectors := make([]float32, count*VectorSize)
+	labels := make([]byte, count)
+
+	for recordIndex := 0; recordIndex < count; recordIndex++ {
+		label, err := reader.ReadByte()
+		if err != nil {
+			return nil, fmt.Errorf("read binary label %d: %w", recordIndex, err)
+		}
+		labels[recordIndex] = label
+
+		offset := recordIndex * VectorSize
+		if err := binary.Read(reader, binary.LittleEndian, vectors[offset:offset+VectorSize]); err != nil {
+			return nil, fmt.Errorf("read binary vector %d: %w", recordIndex, err)
+		}
+	}
+
+	return &VectorStore{
+		Vectors: vectors,
+		Labels:  labels,
+		Count:   count,
+	}, nil
+}
+
+func SaveBinaryVectorStore(path string, store *VectorStore) error {
+	if store == nil {
+		return fmt.Errorf("vector store is nil")
+	}
+	if len(store.Labels) != store.Count {
+		return fmt.Errorf("label count %d does not match store count %d", len(store.Labels), store.Count)
+	}
+	if len(store.Vectors) != store.Count*VectorSize {
+		return fmt.Errorf("vector length %d does not match expected %d", len(store.Vectors), store.Count*VectorSize)
+	}
+
+	file, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("create binary references file: %w", err)
+	}
+	defer file.Close()
+
+	writer := bufio.NewWriter(file)
+
+	header := binaryHeader{
+		Magic:      binaryMagic,
+		Version:    BinaryFormatVersion,
+		VectorSize: VectorSize,
+		Count:      uint64(store.Count),
+	}
+
+	if err := binary.Write(writer, binary.LittleEndian, header); err != nil {
+		return fmt.Errorf("write binary header: %w", err)
+	}
+
+	for recordIndex := 0; recordIndex < store.Count; recordIndex++ {
+		if err := writer.WriteByte(store.Labels[recordIndex]); err != nil {
+			return fmt.Errorf("write binary label %d: %w", recordIndex, err)
+		}
+
+		offset := recordIndex * VectorSize
+		if err := binary.Write(writer, binary.LittleEndian, store.Vectors[offset:offset+VectorSize]); err != nil {
+			return fmt.Errorf("write binary vector %d: %w", recordIndex, err)
+		}
+	}
+
+	if err := writer.Flush(); err != nil {
+		return fmt.Errorf("flush binary references file: %w", err)
+	}
+
+	return nil
+}
+
+func ConvertJSONToBinary(inputPath string, outputPath string) (int, error) {
+	decoder, closeDecoder, err := openDatasetDecoder(inputPath)
+	if err != nil {
+		return 0, err
+	}
+	defer closeDecoder()
+
+	if err := expectJSONArrayStart(decoder); err != nil {
+		return 0, err
+	}
+
+	file, err := os.Create(outputPath)
+	if err != nil {
+		return 0, fmt.Errorf("create binary references file: %w", err)
+	}
+	defer file.Close()
+
+	if err := writePlaceholderHeader(file); err != nil {
+		return 0, err
+	}
+
+	writer := bufio.NewWriter(file)
+	recordIndex := 0
+
+	for decoder.More() {
+		var record ReferenceRecord
+		if err := decoder.Decode(&record); err != nil {
+			return 0, fmt.Errorf("decode record %d: %w", recordIndex, err)
+		}
+
+		label, vector, err := binaryRecordFromReference(record)
+		if err != nil {
+			return 0, fmt.Errorf("record %d %w", recordIndex, err)
+		}
+
+		if err := writer.WriteByte(label); err != nil {
+			return 0, fmt.Errorf("write binary label: %w", err)
+		}
+
+		if err := binary.Write(writer, binary.LittleEndian, vector); err != nil {
+			return 0, fmt.Errorf("write binary vector: %w", err)
+		}
+
+		recordIndex++
+	}
+
+	if err := expectJSONArrayEnd(decoder); err != nil {
+		return 0, err
+	}
+
+	if err := writer.Flush(); err != nil {
+		return 0, fmt.Errorf("flush binary references file: %w", err)
+	}
+
+	if err := writeFinalHeader(file, recordIndex); err != nil {
+		return 0, err
+	}
+
+	return recordIndex, nil
 }
 
 func openDatasetReader(file *os.File, path string) (io.Reader, func() error, error) {
@@ -90,4 +220,147 @@ func openDatasetReader(file *os.File, path string) (io.Reader, func() error, err
 	}
 
 	return gzipReader, gzipReader.Close, nil
+}
+
+var binaryMagic = [8]byte{'A', 'F', 'R', 'D', 'B', 'I', 'N', '1'}
+
+type binaryHeader struct {
+	Magic      [8]byte
+	Version    uint32
+	VectorSize uint32
+	Count      uint64
+}
+
+func readBinaryHeader(reader io.Reader) (binaryHeader, error) {
+	var header binaryHeader
+
+	if err := binary.Read(reader, binary.LittleEndian, &header); err != nil {
+		return binaryHeader{}, fmt.Errorf("read binary header: %w", err)
+	}
+
+	if header.Magic != binaryMagic {
+		return binaryHeader{}, fmt.Errorf("invalid binary references magic")
+	}
+
+	if header.Version != BinaryFormatVersion {
+		return binaryHeader{}, fmt.Errorf("unsupported binary references version %d", header.Version)
+	}
+
+	if header.VectorSize != VectorSize {
+		return binaryHeader{}, fmt.Errorf("binary references vector size %d, expected %d", header.VectorSize, VectorSize)
+	}
+
+	return header, nil
+}
+
+func openDatasetDecoder(path string) (*json.Decoder, func() error, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open references file: %w", err)
+	}
+
+	reader, closeReader, err := openDatasetReader(file, path)
+	if err != nil {
+		_ = file.Close()
+		return nil, nil, err
+	}
+
+	closeAll := func() error {
+		readerErr := closeReader()
+		fileErr := file.Close()
+		if readerErr != nil {
+			return readerErr
+		}
+		return fileErr
+	}
+
+	return json.NewDecoder(reader), closeAll, nil
+}
+
+func expectJSONArrayStart(decoder *json.Decoder) error {
+	startToken, err := decoder.Token()
+	if err != nil {
+		return fmt.Errorf("read references array start: %w", err)
+	}
+
+	delimiter, ok := startToken.(json.Delim)
+	if !ok || delimiter != '[' {
+		return fmt.Errorf("references file must contain a JSON array")
+	}
+
+	return nil
+}
+
+func expectJSONArrayEnd(decoder *json.Decoder) error {
+	endToken, err := decoder.Token()
+	if err != nil {
+		return fmt.Errorf("read references array end: %w", err)
+	}
+
+	delimiter, ok := endToken.(json.Delim)
+	if !ok || delimiter != ']' {
+		return fmt.Errorf("references file has invalid JSON array ending")
+	}
+
+	return nil
+}
+
+func parseLabel(value string) (byte, error) {
+	switch value {
+	case "legit":
+		return LabelLegit, nil
+	case "fraud":
+		return LabelFraud, nil
+	default:
+		return 0, fmt.Errorf("has unknown label %q", value)
+	}
+}
+
+func binaryRecordFromReference(record ReferenceRecord) (byte, [VectorSize]float32, error) {
+	if len(record.Vector) != VectorSize {
+		return 0, [VectorSize]float32{}, fmt.Errorf("has %d dimensions, expected %d", len(record.Vector), VectorSize)
+	}
+
+	label, err := parseLabel(record.Label)
+	if err != nil {
+		return 0, [VectorSize]float32{}, err
+	}
+
+	var vector [VectorSize]float32
+	copy(vector[:], record.Vector)
+	return label, vector, nil
+}
+
+func writePlaceholderHeader(file *os.File) error {
+	header := binaryHeader{
+		Magic:      binaryMagic,
+		Version:    BinaryFormatVersion,
+		VectorSize: VectorSize,
+		Count:      0,
+	}
+
+	if err := binary.Write(file, binary.LittleEndian, header); err != nil {
+		return fmt.Errorf("write binary placeholder header: %w", err)
+	}
+
+	return nil
+}
+
+func writeFinalHeader(file *os.File, count int) error {
+	header := binaryHeader{
+		Magic:      binaryMagic,
+		Version:    BinaryFormatVersion,
+		VectorSize: VectorSize,
+		Count:      uint64(count),
+	}
+
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("seek binary header: %w", err)
+	}
+
+	if err := binary.Write(file, binary.LittleEndian, header); err != nil {
+		return fmt.Errorf("write binary final header: %w", err)
+	}
+
+	return nil
 }

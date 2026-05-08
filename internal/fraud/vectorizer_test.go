@@ -145,7 +145,7 @@ func sampleRequest() FraudScoreRequest {
 		Transaction: Transaction{
 			Amount:       41.12,
 			Installments: 2,
-			RequestedAt:  "2026-03-09T18:45:53Z",
+			RequestedAt:  mustTimestamp("2026-03-09T18:45:53Z"),
 		},
 		Customer: Customer{
 			AvgAmount:      82.24,

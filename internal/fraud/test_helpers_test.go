@@ -15,3 +15,12 @@ func mustParseRFC3339(t *testing.T, value string) time.Time {
 
 	return parsed
 }
+
+func mustTimestamp(value string) Timestamp {
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		panic(err)
+	}
+
+	return Timestamp{unixNano: parsed.UTC().UnixNano()}
+}

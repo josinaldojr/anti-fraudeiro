@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -51,5 +52,76 @@ func TestLoadVectorStoreFromGzip(t *testing.T) {
 
 	if got := store.Labels[1]; got != LabelLegit {
 		t.Fatalf("store.Labels[1] = %d, want %d", got, LabelLegit)
+	}
+}
+
+func TestBinaryVectorStoreRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	path := filepath.Join(tempDir, "references.bin")
+
+	expected := &VectorStore{
+		Vectors: []float32{
+			0, 0, 0, 0, 0, -1, -1, 0, 0, 0, 0, 0, 0.5, 0,
+			1, 1, 1, 1, 1, -1, -1, 1, 1, 1, 1, 1, 0.2, 1,
+		},
+		Labels: []byte{LabelFraud, LabelLegit},
+		Count:  2,
+	}
+
+	if err := SaveBinaryVectorStore(path, expected); err != nil {
+		t.Fatalf("SaveBinaryVectorStore returned error: %v", err)
+	}
+
+	actual, err := LoadBinaryVectorStore(path)
+	if err != nil {
+		t.Fatalf("LoadBinaryVectorStore returned error: %v", err)
+	}
+
+	if actual.Count != expected.Count {
+		t.Fatalf("actual.Count = %d, want %d", actual.Count, expected.Count)
+	}
+
+	if !reflect.DeepEqual(actual.Labels, expected.Labels) {
+		t.Fatalf("actual.Labels = %v, want %v", actual.Labels, expected.Labels)
+	}
+
+	if !reflect.DeepEqual(actual.Vectors, expected.Vectors) {
+		t.Fatalf("actual.Vectors = %v, want %v", actual.Vectors, expected.Vectors)
+	}
+}
+
+func TestConvertJSONToBinary(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	inputPath := filepath.Join(tempDir, "references.json")
+	outputPath := filepath.Join(tempDir, "references.bin")
+
+	if err := os.WriteFile(inputPath, []byte(`[{"vector":[0,0,0,0,0,-1,-1,0,0,0,0,0,0.5,0],"label":"fraud"},{"vector":[1,1,1,1,1,-1,-1,1,1,1,1,1,0.2,1],"label":"legit"}]`), 0o644); err != nil {
+		t.Fatalf("os.WriteFile returned error: %v", err)
+	}
+
+	count, err := ConvertJSONToBinary(inputPath, outputPath)
+	if err != nil {
+		t.Fatalf("ConvertJSONToBinary returned error: %v", err)
+	}
+
+	if count != 2 {
+		t.Fatalf("count = %d, want 2", count)
+	}
+
+	store, err := LoadBinaryVectorStore(outputPath)
+	if err != nil {
+		t.Fatalf("LoadBinaryVectorStore returned error: %v", err)
+	}
+
+	if store.Count != 2 {
+		t.Fatalf("store.Count = %d, want 2", store.Count)
+	}
+
+	if !reflect.DeepEqual(store.Labels, []byte{LabelFraud, LabelLegit}) {
+		t.Fatalf("store.Labels = %v, want %v", store.Labels, []byte{LabelFraud, LabelLegit})
 	}
 }

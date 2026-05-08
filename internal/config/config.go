@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/josinaldojr/anti-fraudeiro/internal/dataset"
 )
 
 type Config struct {
@@ -27,9 +29,12 @@ type Normalization struct {
 
 func Load() Config {
 	resourceDir := envOrDefault("RESOURCE_DIR", "resources")
-	defaultReferencesPath := filepath.Join(resourceDir, "references.json.gz")
+	defaultReferencesPath := filepath.Join(resourceDir, dataset.BinaryReferenceFile)
 	if _, err := os.Stat(defaultReferencesPath); err != nil {
-		defaultReferencesPath = filepath.Join(resourceDir, "example-references.json")
+		defaultReferencesPath = filepath.Join(resourceDir, dataset.CompressedReferenceFile)
+	}
+	if _, err := os.Stat(defaultReferencesPath); err != nil {
+		defaultReferencesPath = filepath.Join(resourceDir, dataset.ExampleReferenceFile)
 	}
 
 	return Config{

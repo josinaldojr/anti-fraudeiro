@@ -57,11 +57,18 @@ docker/        Nginx configuration
 
 The service expects the official challenge resource files under `resources/`:
 
+- `references.bin`
 - `references.json.gz`
 - `mcc_risk.json`
 - `normalization.json`
 
-For local development, the application falls back to `resources/example-references.json` when `resources/references.json.gz` is not present.
+Load priority:
+
+1. `resources/references.bin`
+2. `resources/references.json.gz`
+3. `resources/example-references.json`
+
+For local development, the application falls back to `resources/example-references.json` when the official dataset is not present.
 
 ### Configuration
 
@@ -88,6 +95,23 @@ go run ./cmd/api
 ```bash
 go test ./...
 ```
+
+### Generate Compact Binary Dataset
+
+```bash
+go run ./cmd/preprocess
+```
+
+Or via Makefile:
+
+```bash
+make preprocess
+```
+
+Default conversion:
+
+- input: `resources/references.json.gz`
+- output: `resources/references.bin`
 
 ### Run With Docker Compose
 
@@ -152,6 +176,7 @@ curl -i -X POST http://localhost:9999/fraud-score \
 
 Useful commands:
 
+- `make preprocess`
 - `make test`
 - `make run`
 - `make docker-up`
@@ -164,7 +189,7 @@ Useful commands:
 - The public port is `9999`, as required by the challenge.
 - The load balancer is Nginx and performs round-robin distribution only.
 - The application instances run behind the load balancer on port `8080`.
-- The dataset loader supports both plain JSON and `gzip`-compressed JSON.
+- The dataset loader supports compact binary, plain JSON, and `gzip`-compressed JSON.
 - The current reference store is kept in contiguous slices for lower overhead on the hot path.
 
 ## Challenge References
