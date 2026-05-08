@@ -1,8 +1,9 @@
 package fraud
 
 import (
-	"encoding/json"
+	"bytes"
 	"fmt"
+	"strconv"
 	"time"
 )
 
@@ -56,17 +57,17 @@ type Timestamp struct {
 }
 
 func (t *Timestamp) UnmarshalJSON(data []byte) error {
-	var value string
-	if err := json.Unmarshal(data, &value); err != nil {
+	value, err := parseJSONString(data)
+	if err != nil {
 		return fmt.Errorf("timestamp must be an RFC3339 string: %w", err)
 	}
 
-	parsed, err := time.Parse(time.RFC3339, value)
+	parsed, err := ParseTimestamp(value)
 	if err != nil {
-		return fmt.Errorf("invalid RFC3339 timestamp %q: %w", value, err)
+		return err
 	}
 
-	t.unixNano = parsed.UTC().UnixNano()
+	*t = parsed
 	return nil
 }
 
@@ -76,4 +77,31 @@ func (t Timestamp) Time() time.Time {
 
 func (t Timestamp) UnixNano() int64 {
 	return t.unixNano
+}
+
+func ParseTimestamp(value string) (Timestamp, error) {
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return Timestamp{}, fmt.Errorf("invalid RFC3339 timestamp %q: %w", value, err)
+	}
+
+	return Timestamp{unixNano: parsed.UTC().UnixNano()}, nil
+}
+
+func parseJSONString(data []byte) (string, error) {
+	if len(data) < 2 || data[0] != '"' || data[len(data)-1] != '"' {
+		return "", fmt.Errorf("invalid JSON string")
+	}
+
+	raw := data[1 : len(data)-1]
+	if bytes.IndexByte(raw, '\\') == -1 {
+		return string(raw), nil
+	}
+
+	value, err := strconv.Unquote(string(data))
+	if err != nil {
+		return "", err
+	}
+
+	return value, nil
 }
