@@ -1,0 +1,7 @@
+bin/
+coverage.out
+dist/
+.gocache/
+.gomodcache/
+.tmp/
+*.exe
