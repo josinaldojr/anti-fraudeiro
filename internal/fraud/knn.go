@@ -159,7 +159,7 @@ func findTop5Float32Bucketed(query [14]float32, store *dataset.VectorStore, stra
 	labels := store.Labels
 	amountBucket, hourBucket, dayBucket, tx24hBucket := dataset.BucketCoordinatesFromQuery(q0, q3, q4, q8)
 	amountStart, amountEnd, hourStart, hourEnd, dayStart, dayEnd, txStart, txEnd, candidateCount :=
-		selectBucketWindow(store.BucketIndex, amountBucket, hourBucket, dayBucket, tx24hBucket, cfg)
+		selectBucketWindow(store.BucketIndex, store.BucketPrefixSums, amountBucket, hourBucket, dayBucket, tx24hBucket, cfg)
 	if candidateCount < topK {
 		return findTop5Float32(query, &dataset.VectorStore{Vectors: vectors, Labels: labels, Count: store.Count}, "", cfg)
 	}
@@ -449,7 +449,7 @@ func findTop5QuantizedBucketed(
 	)
 
 	amountStart, amountEnd, hourStart, hourEnd, dayStart, dayEnd, txStart, txEnd, candidateCount :=
-		selectBucketWindow(store.BucketIndex, amountBucket, hourBucket, dayBucket, tx24hBucket, cfg)
+		selectBucketWindow(store.BucketIndex, store.BucketPrefixSums, amountBucket, hourBucket, dayBucket, tx24hBucket, cfg)
 	if candidateCount < topK {
 		return findTop5Quantized(
 			[14]float32{
@@ -809,6 +809,7 @@ func intervalDistance(query float32, bucket int, bucketCount int) float32 {
 
 func selectBucketWindow(
 	bucketIndex [][]uint32,
+	bucketPrefixSums []uint32,
 	amountBucket int,
 	hourBucket int,
 	dayBucket int,
@@ -825,12 +826,26 @@ func selectBucketWindow(
 		txStart = bucketRangeStart(tx24hBucket, dataset.Tx24hBucketCount, radius)
 		txEnd = bucketRangeEnd(tx24hBucket, dataset.Tx24hBucketCount, radius)
 
-		candidateCount = 0
-		for amountIndex := amountStart; amountIndex <= amountEnd; amountIndex++ {
-			for hourIndex := hourStart; hourIndex <= hourEnd; hourIndex++ {
-				for dayIndex := dayStart; dayIndex <= dayEnd; dayIndex++ {
-					for txIndex := txStart; txIndex <= txEnd; txIndex++ {
-						candidateCount += len(bucketIndex[dataset.BucketIDFromCoordinates(amountIndex, hourIndex, dayIndex, txIndex)])
+		if len(bucketPrefixSums) > 0 {
+			candidateCount = dataset.CountBucketWindowCandidates(
+				bucketPrefixSums,
+				amountStart,
+				amountEnd,
+				hourStart,
+				hourEnd,
+				dayStart,
+				dayEnd,
+				txStart,
+				txEnd,
+			)
+		} else {
+			candidateCount = 0
+			for amountIndex := amountStart; amountIndex <= amountEnd; amountIndex++ {
+				for hourIndex := hourStart; hourIndex <= hourEnd; hourIndex++ {
+					for dayIndex := dayStart; dayIndex <= dayEnd; dayIndex++ {
+						for txIndex := txStart; txIndex <= txEnd; txIndex++ {
+							candidateCount += len(bucketIndex[dataset.BucketIDFromCoordinates(amountIndex, hourIndex, dayIndex, txIndex)])
+						}
 					}
 				}
 			}

@@ -1,0 +1,12 @@
+.git
+.gitmodules
+.rinha
+.tmp
+.gocache
+.gocache_local
+.gomodcache
+artifacts
+bin
+coverage.out
+dist
+*.exe

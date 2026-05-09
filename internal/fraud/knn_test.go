@@ -93,6 +93,31 @@ func BenchmarkFindTop5BucketConfigs(b *testing.B) {
 	}
 }
 
+func BenchmarkSelectBucketWindow(b *testing.B) {
+	b.ReportAllocs()
+
+	store := &dataset.VectorStore{
+		QuantizedVectors: benchmarkQuantizedVectors(1024),
+		Labels:           benchmarkLabels(1024),
+		Count:            1024,
+	}
+	dataset.BuildBucketIndex(store)
+
+	cfg := searchConfig{bucketTargetCandidates: 256, bucketMaxSearchRadius: 3}
+
+	for b.Loop() {
+		_, _, _, _, _, _, _, _, _ = selectBucketWindow(
+			store.BucketIndex,
+			store.BucketPrefixSums,
+			16,
+			12,
+			3,
+			8,
+			cfg,
+		)
+	}
+}
+
 func TestSelectBucketWindowUsesTargetCandidates(t *testing.T) {
 	t.Parallel()
 
@@ -104,6 +129,7 @@ func TestSelectBucketWindowUsesTargetCandidates(t *testing.T) {
 
 	_, amountEnd, _, _, _, _, _, _, candidateCount := selectBucketWindow(
 		buckets,
+		nil,
 		0,
 		0,
 		0,

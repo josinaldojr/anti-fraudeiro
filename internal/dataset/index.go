@@ -13,6 +13,7 @@ func BuildBucketIndex(store *VectorStore) {
 			buckets[bucketID] = append(buckets[bucketID], uint32(recordIndex))
 		}
 		store.BucketIndex = buckets
+		store.BucketPrefixSums = buildBucketPrefixSums(buckets)
 		store.SecondaryBucketIndex = nil
 		return
 	}
@@ -23,7 +24,53 @@ func BuildBucketIndex(store *VectorStore) {
 	}
 
 	store.BucketIndex = buckets
+	store.BucketPrefixSums = buildBucketPrefixSums(buckets)
 	store.SecondaryBucketIndex = nil
+}
+
+func CountBucketWindowCandidates(
+	bucketPrefixSums []uint32,
+	amountStart int,
+	amountEnd int,
+	hourStart int,
+	hourEnd int,
+	dayStart int,
+	dayEnd int,
+	txStart int,
+	txEnd int,
+) int {
+	if len(bucketPrefixSums) == 0 {
+		return 0
+	}
+
+	startAmount := amountStart
+	startHour := hourStart
+	startDay := dayStart
+	startTx := txStart
+
+	endAmount := amountEnd + 1
+	endHour := hourEnd + 1
+	endDay := dayEnd + 1
+	endTx := txEnd + 1
+
+	total := prefixValue(bucketPrefixSums, endAmount, endHour, endDay, endTx) -
+		prefixValue(bucketPrefixSums, startAmount, endHour, endDay, endTx) -
+		prefixValue(bucketPrefixSums, endAmount, startHour, endDay, endTx) -
+		prefixValue(bucketPrefixSums, endAmount, endHour, startDay, endTx) -
+		prefixValue(bucketPrefixSums, endAmount, endHour, endDay, startTx) +
+		prefixValue(bucketPrefixSums, startAmount, startHour, endDay, endTx) +
+		prefixValue(bucketPrefixSums, startAmount, endHour, startDay, endTx) +
+		prefixValue(bucketPrefixSums, startAmount, endHour, endDay, startTx) +
+		prefixValue(bucketPrefixSums, endAmount, startHour, startDay, endTx) +
+		prefixValue(bucketPrefixSums, endAmount, startHour, endDay, startTx) +
+		prefixValue(bucketPrefixSums, endAmount, endHour, startDay, startTx) -
+		prefixValue(bucketPrefixSums, startAmount, startHour, startDay, endTx) -
+		prefixValue(bucketPrefixSums, startAmount, startHour, endDay, startTx) -
+		prefixValue(bucketPrefixSums, startAmount, endHour, startDay, startTx) -
+		prefixValue(bucketPrefixSums, endAmount, startHour, startDay, startTx) +
+		prefixValue(bucketPrefixSums, startAmount, startHour, startDay, startTx)
+
+	return int(total)
 }
 
 func BuildSecondaryBucketIndex(store *VectorStore) {
@@ -140,4 +187,78 @@ func scalarBucket(value float32, bucketCount int) int {
 
 func quantizedScalarBucket(value uint16, bucketCount int) int {
 	return scalarBucket((float32(value)/quantizedScale)-1, bucketCount)
+}
+
+func buildBucketPrefixSums(buckets [][]uint32) []uint32 {
+	prefixAmountBucketCount := AmountBucketCount + 1
+	prefixHourBucketCount := HourBucketCount + 1
+	prefixDayBucketCount := DayBucketCount + 1
+	prefixTx24hBucketCount := Tx24hBucketCount + 1
+
+	prefixSums := make([]uint32, prefixAmountBucketCount*prefixHourBucketCount*prefixDayBucketCount*prefixTx24hBucketCount)
+
+	for amountIndex := 0; amountIndex < AmountBucketCount; amountIndex++ {
+		for hourIndex := 0; hourIndex < HourBucketCount; hourIndex++ {
+			for dayIndex := 0; dayIndex < DayBucketCount; dayIndex++ {
+				for txIndex := 0; txIndex < Tx24hBucketCount; txIndex++ {
+					prefixSums[prefixIndex(amountIndex+1, hourIndex+1, dayIndex+1, txIndex+1)] =
+						uint32(len(buckets[bucketID(amountIndex, hourIndex, dayIndex, txIndex)]))
+				}
+			}
+		}
+	}
+
+	for amountIndex := 1; amountIndex <= AmountBucketCount; amountIndex++ {
+		for hourIndex := 1; hourIndex <= HourBucketCount; hourIndex++ {
+			for dayIndex := 1; dayIndex <= DayBucketCount; dayIndex++ {
+				for txIndex := 1; txIndex <= Tx24hBucketCount; txIndex++ {
+					index := prefixIndex(amountIndex, hourIndex, dayIndex, txIndex)
+					prefixSums[index] += prefixSums[prefixIndex(amountIndex-1, hourIndex, dayIndex, txIndex)]
+				}
+			}
+		}
+	}
+
+	for amountIndex := 0; amountIndex <= AmountBucketCount; amountIndex++ {
+		for hourIndex := 1; hourIndex <= HourBucketCount; hourIndex++ {
+			for dayIndex := 1; dayIndex <= DayBucketCount; dayIndex++ {
+				for txIndex := 1; txIndex <= Tx24hBucketCount; txIndex++ {
+					index := prefixIndex(amountIndex, hourIndex, dayIndex, txIndex)
+					prefixSums[index] += prefixSums[prefixIndex(amountIndex, hourIndex-1, dayIndex, txIndex)]
+				}
+			}
+		}
+	}
+
+	for amountIndex := 0; amountIndex <= AmountBucketCount; amountIndex++ {
+		for hourIndex := 0; hourIndex <= HourBucketCount; hourIndex++ {
+			for dayIndex := 1; dayIndex <= DayBucketCount; dayIndex++ {
+				for txIndex := 1; txIndex <= Tx24hBucketCount; txIndex++ {
+					index := prefixIndex(amountIndex, hourIndex, dayIndex, txIndex)
+					prefixSums[index] += prefixSums[prefixIndex(amountIndex, hourIndex, dayIndex-1, txIndex)]
+				}
+			}
+		}
+	}
+
+	for amountIndex := 0; amountIndex <= AmountBucketCount; amountIndex++ {
+		for hourIndex := 0; hourIndex <= HourBucketCount; hourIndex++ {
+			for dayIndex := 0; dayIndex <= DayBucketCount; dayIndex++ {
+				for txIndex := 1; txIndex <= Tx24hBucketCount; txIndex++ {
+					index := prefixIndex(amountIndex, hourIndex, dayIndex, txIndex)
+					prefixSums[index] += prefixSums[prefixIndex(amountIndex, hourIndex, dayIndex, txIndex-1)]
+				}
+			}
+		}
+	}
+
+	return prefixSums
+}
+
+func prefixValue(prefixSums []uint32, amountIndex int, hourIndex int, dayIndex int, txIndex int) uint32 {
+	return prefixSums[prefixIndex(amountIndex, hourIndex, dayIndex, txIndex)]
+}
+
+func prefixIndex(amountIndex int, hourIndex int, dayIndex int, txIndex int) int {
+	return (((amountIndex*(HourBucketCount+1))+hourIndex)*(DayBucketCount+1)+dayIndex)*(Tx24hBucketCount+1) + txIndex
 }

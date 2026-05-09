@@ -2,6 +2,7 @@ bin/
 coverage.out
 dist/
 .gocache/
+.gocache_local/
 .gomodcache/
 .tmp/
 *.exe

@@ -34,6 +34,7 @@ type VectorStore struct {
 	Labels               []byte
 	Count                int
 	BucketIndex          [][]uint32
+	BucketPrefixSums     []uint32
 	SecondaryBucketIndex [][]uint32
 	mappedData           []byte
 }
@@ -48,6 +49,9 @@ func (store *VectorStore) Close() error {
 	store.Vectors = nil
 	store.QuantizedVectors = nil
 	store.Labels = nil
+	store.BucketIndex = nil
+	store.BucketPrefixSums = nil
+	store.SecondaryBucketIndex = nil
 
 	return unmapFile(mappedData)
 }
