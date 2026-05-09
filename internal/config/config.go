@@ -21,6 +21,9 @@ type Config struct {
 	MemoryLimitMiB             int64
 	MaxConcurrentFraudRequests int
 	BucketStrategy             string
+	BucketTargetCandidates     int
+	BucketMaxSearchRadius      int
+	EnableSecondaryBucketIndex bool
 }
 
 type Normalization struct {
@@ -53,6 +56,9 @@ func Load() Config {
 		MemoryLimitMiB:             envInt64OrDefault("MEMORY_LIMIT_MIB", 0),
 		MaxConcurrentFraudRequests: envIntOrDefault("MAX_CONCURRENT_FRAUD_REQUESTS", 0),
 		BucketStrategy:             envOrDefault("BUCKET_STRATEGY", "window"),
+		BucketTargetCandidates:     envIntOrDefault("BUCKET_TARGET_CANDIDATES", 256),
+		BucketMaxSearchRadius:      envIntOrDefault("BUCKET_MAX_SEARCH_RADIUS", 3),
+		EnableSecondaryBucketIndex: envBoolOrDefault("ENABLE_SECONDARY_BUCKET_INDEX", false),
 	}
 }
 
@@ -126,4 +132,20 @@ func envInt64OrDefault(key string, fallback int64) int64 {
 	}
 
 	return parsed
+}
+
+func envBoolOrDefault(key string, fallback bool) bool {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+
+	switch strings.ToLower(value) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
+	}
 }

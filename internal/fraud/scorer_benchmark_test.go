@@ -1,10 +1,47 @@
 package fraud
 
 import (
+	"os"
+	"path/filepath"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/josinaldojr/anti-fraudeiro/internal/dataset"
 )
+
+func BenchmarkTimestampParse(b *testing.B) {
+	b.ReportAllocs()
+
+	for b.Loop() {
+		if _, err := ParseTimestamp("2026-03-11T20:23:35Z"); err != nil {
+			b.Fatalf("ParseTimestamp returned error: %v", err)
+		}
+	}
+}
+
+func BenchmarkTimestampParseTimeParse(b *testing.B) {
+	b.ReportAllocs()
+
+	for b.Loop() {
+		if _, err := parseTimestampWithTimeParse("2026-03-11T20:23:35Z"); err != nil {
+			b.Fatalf("parseTimestampWithTimeParse returned error: %v", err)
+		}
+	}
+}
+
+func BenchmarkVectorize(b *testing.B) {
+	b.ReportAllocs()
+
+	vectorizer := newTestVectorizer()
+	request := sampleRequest()
+
+	for b.Loop() {
+		if _, err := vectorizer.Vectorize(request); err != nil {
+			b.Fatalf("Vectorize returned error: %v", err)
+		}
+	}
+}
 
 func BenchmarkScorerScore(b *testing.B) {
 	b.ReportAllocs()
@@ -43,6 +80,58 @@ func BenchmarkScorerScoreLargeKnownMerchantSet(b *testing.B) {
 			b.Fatalf("Score returned error: %v", err)
 		}
 	}
+}
+
+func BenchmarkKnownMerchantLookupStrategies(b *testing.B) {
+	b.ReportAllocs()
+
+	knownMerchants := benchmarkKnownMerchants(24)
+	knownMerchants[18] = "MERC-TARGET"
+
+	for _, threshold := range []int{8, 16, 32} {
+		b.Run("threshold_"+strconv.Itoa(threshold), func(b *testing.B) {
+			customer := Customer{KnownMerchants: knownMerchants}
+			customer.knownMerchantSet = buildKnownMerchantSetWithThreshold(customer.KnownMerchants, threshold)
+
+			b.ResetTimer()
+			for b.Loop() {
+				if !customer.HasKnownMerchant("MERC-TARGET") {
+					b.Fatal("expected merchant to be found")
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkFindTop5RealDataset(b *testing.B) {
+	b.ReportAllocs()
+
+	referencesPath := filepath.Join("..", "..", "resources", dataset.BinaryReferenceFile)
+	if _, err := os.Stat(referencesPath); err != nil {
+		b.Skipf("real dataset not available: %v", err)
+	}
+
+	store, err := dataset.LoadVectorStore(referencesPath)
+	if err != nil {
+		b.Fatalf("LoadVectorStore returned error: %v", err)
+	}
+	defer store.Close()
+
+	query := sampleRequestVector()
+	b.ResetTimer()
+
+	for b.Loop() {
+		_ = FindTop5(query, store)
+	}
+}
+
+func parseTimestampWithTimeParse(value string) (Timestamp, error) {
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return Timestamp{}, err
+	}
+
+	return Timestamp{unixNano: parsed.UTC().UnixNano()}, nil
 }
 
 func benchmarkVectors(count int) []float32 {

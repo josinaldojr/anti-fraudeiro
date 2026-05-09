@@ -8,28 +8,49 @@ import (
 )
 
 const (
-	bucketTargetCandidates                = 256
-	bucketMaxSearchRadius                 = 2
 	candidateSeenLimit                    = 4096
 	secondaryFallbackMaxPrimaryCandidates = 96
 	secondaryFallbackMaxBucketSize        = 256
-	maxWindowBuckets                      = 625
+	maxWindowBuckets                      = 2401
 )
+
+type searchConfig struct {
+	bucketTargetCandidates int
+	bucketMaxSearchRadius  int
+}
+
+var defaultSearchConfig = searchConfig{
+	bucketTargetCandidates: 256,
+	bucketMaxSearchRadius:  3,
+}
+
+func SetDefaultSearchConfig(bucketTargetCandidates int, bucketMaxSearchRadius int) {
+	if bucketTargetCandidates > 0 {
+		defaultSearchConfig.bucketTargetCandidates = bucketTargetCandidates
+	}
+	if bucketMaxSearchRadius >= 0 && bucketMaxSearchRadius <= 3 {
+		defaultSearchConfig.bucketMaxSearchRadius = bucketMaxSearchRadius
+	}
+}
 
 func FindTop5(query [14]float32, store *dataset.VectorStore) (fraudCount int) {
 	return FindTop5WithStrategy(query, store, BucketStrategyWindow)
 }
 
 func FindTop5WithStrategy(query [14]float32, store *dataset.VectorStore, strategy BucketStrategy) (fraudCount int) {
+	return findTop5WithConfig(query, store, strategy, defaultSearchConfig)
+}
+
+func findTop5WithConfig(query [14]float32, store *dataset.VectorStore, strategy BucketStrategy, cfg searchConfig) (fraudCount int) {
 	if store == nil || store.Count == 0 {
 		return 0
 	}
 
 	if len(store.QuantizedVectors) > 0 {
-		return findTop5Quantized(query, store, strategy)
+		return findTop5Quantized(query, store, strategy, cfg)
 	}
 
-	return findTop5Float32(query, store, strategy)
+	return findTop5Float32(query, store, strategy, cfg)
 }
 
 func FindTop5Exact(query [14]float32, store *dataset.VectorStore) (fraudCount int) {
@@ -38,13 +59,13 @@ func FindTop5Exact(query [14]float32, store *dataset.VectorStore) (fraudCount in
 	}
 
 	if len(store.QuantizedVectors) > 0 {
-		return findTop5Quantized(query, store, "")
+		return findTop5Quantized(query, store, "", defaultSearchConfig)
 	}
 
-	return findTop5Float32(query, store, "")
+	return findTop5Float32(query, store, "", defaultSearchConfig)
 }
 
-func findTop5Float32(query [14]float32, store *dataset.VectorStore, strategy BucketStrategy) (fraudCount int) {
+func findTop5Float32(query [14]float32, store *dataset.VectorStore, strategy BucketStrategy, cfg searchConfig) (fraudCount int) {
 	q0 := query[0]
 	q1 := query[1]
 	q2 := query[2]
@@ -71,7 +92,7 @@ func findTop5Float32(query [14]float32, store *dataset.VectorStore, strategy Buc
 	}
 
 	if len(store.BucketIndex) > 0 && strategy != "" {
-		return findTop5Float32Bucketed(query, store, strategy, bestDistances, bestLabels)
+		return findTop5Float32Bucketed(query, store, strategy, cfg, bestDistances, bestLabels)
 	}
 
 	for vectorIndex, baseOffset := 0, 0; vectorIndex < store.Count; vectorIndex, baseOffset = vectorIndex+1, baseOffset+dataset.VectorSize {
@@ -118,7 +139,7 @@ func findTop5Float32(query [14]float32, store *dataset.VectorStore, strategy Buc
 	return fraudCount
 }
 
-func findTop5Float32Bucketed(query [14]float32, store *dataset.VectorStore, strategy BucketStrategy, bestDistances [topK]float32, bestLabels [topK]byte) (fraudCount int) {
+func findTop5Float32Bucketed(query [14]float32, store *dataset.VectorStore, strategy BucketStrategy, cfg searchConfig, bestDistances [topK]float32, bestLabels [topK]byte) (fraudCount int) {
 	q0 := query[0]
 	q1 := query[1]
 	q2 := query[2]
@@ -138,9 +159,9 @@ func findTop5Float32Bucketed(query [14]float32, store *dataset.VectorStore, stra
 	labels := store.Labels
 	amountBucket, hourBucket, dayBucket, tx24hBucket := dataset.BucketCoordinatesFromQuery(q0, q3, q4, q8)
 	amountStart, amountEnd, hourStart, hourEnd, dayStart, dayEnd, txStart, txEnd, candidateCount :=
-		selectBucketWindow(store.BucketIndex, amountBucket, hourBucket, dayBucket, tx24hBucket)
+		selectBucketWindow(store.BucketIndex, amountBucket, hourBucket, dayBucket, tx24hBucket, cfg)
 	if candidateCount < topK {
-		return findTop5Float32(query, &dataset.VectorStore{Vectors: vectors, Labels: labels, Count: store.Count}, "")
+		return findTop5Float32(query, &dataset.VectorStore{Vectors: vectors, Labels: labels, Count: store.Count}, "", cfg)
 	}
 
 	trackSeen := len(store.SecondaryBucketIndex) > 0
@@ -208,7 +229,7 @@ func findTop5Float32Bucketed(query [14]float32, store *dataset.VectorStore, stra
 					insertTopK(distance, labels[vectorIndex], &bestDistances, &bestLabels)
 				}
 			}
-			if processedCandidates >= bucketTargetCandidates && processedCandidates >= topK {
+			if processedCandidates >= cfg.bucketTargetCandidates {
 				break
 			}
 		}
@@ -323,7 +344,7 @@ func findTop5Float32Bucketed(query [14]float32, store *dataset.VectorStore, stra
 	return fraudCount
 }
 
-func findTop5Quantized(query [14]float32, store *dataset.VectorStore, strategy BucketStrategy) (fraudCount int) {
+func findTop5Quantized(query [14]float32, store *dataset.VectorStore, strategy BucketStrategy, cfg searchConfig) (fraudCount int) {
 	q0 := int32(dataset.QuantizeComponent(query[0]))
 	q1 := int32(dataset.QuantizeComponent(query[1]))
 	q2 := int32(dataset.QuantizeComponent(query[2]))
@@ -350,7 +371,7 @@ func findTop5Quantized(query [14]float32, store *dataset.VectorStore, strategy B
 	}
 
 	if len(store.BucketIndex) > 0 && strategy != "" {
-		return findTop5QuantizedBucketed(store, strategy, q0, q1, q2, q3, q4, q5, q6, q7, q8, q9, q10, q11, q12, q13, bestDistances, bestLabels)
+		return findTop5QuantizedBucketed(store, strategy, cfg, q0, q1, q2, q3, q4, q5, q6, q7, q8, q9, q10, q11, q12, q13, bestDistances, bestLabels)
 	}
 
 	for vectorIndex, baseOffset := 0, 0; vectorIndex < store.Count; vectorIndex, baseOffset = vectorIndex+1, baseOffset+dataset.VectorSize {
@@ -400,6 +421,7 @@ func findTop5Quantized(query [14]float32, store *dataset.VectorStore, strategy B
 func findTop5QuantizedBucketed(
 	store *dataset.VectorStore,
 	strategy BucketStrategy,
+	cfg searchConfig,
 	q0 int32,
 	q1 int32,
 	q2 int32,
@@ -427,7 +449,7 @@ func findTop5QuantizedBucketed(
 	)
 
 	amountStart, amountEnd, hourStart, hourEnd, dayStart, dayEnd, txStart, txEnd, candidateCount :=
-		selectBucketWindow(store.BucketIndex, amountBucket, hourBucket, dayBucket, tx24hBucket)
+		selectBucketWindow(store.BucketIndex, amountBucket, hourBucket, dayBucket, tx24hBucket, cfg)
 	if candidateCount < topK {
 		return findTop5Quantized(
 			[14]float32{
@@ -448,6 +470,7 @@ func findTop5QuantizedBucketed(
 			},
 			&dataset.VectorStore{QuantizedVectors: vectors, Labels: labels, Count: store.Count},
 			"",
+			cfg,
 		)
 	}
 
@@ -521,7 +544,7 @@ func findTop5QuantizedBucketed(
 					insertTopKUint64(distance, labels[vectorIndex], &bestDistances, &bestLabels)
 				}
 			}
-			if processedCandidates >= bucketTargetCandidates && processedCandidates >= topK {
+			if processedCandidates >= cfg.bucketTargetCandidates {
 				break
 			}
 		}
@@ -790,8 +813,9 @@ func selectBucketWindow(
 	hourBucket int,
 	dayBucket int,
 	tx24hBucket int,
+	cfg searchConfig,
 ) (amountStart int, amountEnd int, hourStart int, hourEnd int, dayStart int, dayEnd int, txStart int, txEnd int, candidateCount int) {
-	for radius := 0; radius <= bucketMaxSearchRadius; radius++ {
+	for radius := 0; radius <= cfg.bucketMaxSearchRadius; radius++ {
 		amountStart = bucketRangeStart(amountBucket, dataset.AmountBucketCount, radius)
 		amountEnd = bucketRangeEnd(amountBucket, dataset.AmountBucketCount, radius)
 		hourStart = bucketRangeStart(hourBucket, dataset.HourBucketCount, radius)
@@ -812,7 +836,7 @@ func selectBucketWindow(
 			}
 		}
 
-		if candidateCount >= bucketTargetCandidates || candidateCount >= topK {
+		if candidateCount >= cfg.bucketTargetCandidates {
 			return amountStart, amountEnd, hourStart, hourEnd, dayStart, dayEnd, txStart, txEnd, candidateCount
 		}
 	}

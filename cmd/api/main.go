@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"net/http"
+	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"time"
@@ -37,9 +38,15 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	defer store.Close()
+
+	if cfg.EnableSecondaryBucketIndex {
+		dataset.BuildSecondaryBucketIndex(store)
+	}
 
 	vectorizer := fraud.NewVectorizer(normalization, mccRisk)
 	bucketStrategy := fraud.NormalizeBucketStrategy(cfg.BucketStrategy)
+	fraud.SetDefaultSearchConfig(cfg.BucketTargetCandidates, cfg.BucketMaxSearchRadius)
 	scorer := fraud.NewScorer(vectorizer, store, bucketStrategy)
 	handler := api.NewHandler(scorer, cfg.MaxConcurrentFraudRequests)
 
@@ -50,16 +57,7 @@ func run() error {
 		IdleTimeout:       30 * time.Second,
 	}
 
-	log.Printf(
-		"anti-fraudeiro listening on %s with %d reference vectors (gomaxprocs=%d gc_percent=%d memory_limit_mib=%d max_concurrent_fraud_requests=%d bucket_strategy=%s)",
-		cfg.ListenAddr(),
-		store.Count,
-		runtime.GOMAXPROCS(0),
-		cfg.GCPercent,
-		cfg.MemoryLimitMiB,
-		cfg.MaxConcurrentFraudRequests,
-		bucketStrategy,
-	)
+	logDatasetStartup(cfg, store, bucketStrategy)
 
 	return server.ListenAndServe()
 }
@@ -76,4 +74,34 @@ func applyRuntimeTuning(cfg config.Config) {
 	if cfg.MemoryLimitMiB > 0 {
 		debug.SetMemoryLimit(cfg.MemoryLimitMiB << 20)
 	}
+}
+
+func logDatasetStartup(cfg config.Config, store *dataset.VectorStore, bucketStrategy fraud.BucketStrategy) {
+	format := "float32"
+	if len(store.QuantizedVectors) > 0 {
+		format = "quantized"
+	}
+
+	if filepath.Base(cfg.ReferencesPath) == dataset.ExampleReferenceFile {
+		log.Printf("WARNING: using example-references.json fallback, official dataset was not found")
+	}
+
+	log.Printf("loaded references from %s", cfg.ReferencesPath)
+	log.Printf(
+		"reference vectors count=%d reference_format=%s bucket_index_enabled=%t secondary_bucket_index_enabled=%t gomaxprocs=%d gc_percent=%d memory_limit_mib=%d max_concurrent_fraud_requests=%d bucket_strategy=%s",
+		store.Count,
+		format,
+		len(store.BucketIndex) > 0,
+		len(store.SecondaryBucketIndex) > 0,
+		runtime.GOMAXPROCS(0),
+		cfg.GCPercent,
+		cfg.MemoryLimitMiB,
+		cfg.MaxConcurrentFraudRequests,
+		bucketStrategy,
+	)
+	log.Printf(
+		"bucket_target_candidates=%d bucket_max_search_radius=%d",
+		cfg.BucketTargetCandidates,
+		cfg.BucketMaxSearchRadius,
+	)
 }

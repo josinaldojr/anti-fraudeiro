@@ -1,0 +1,70 @@
+services:
+  nginx:
+    image: nginx:1.29-alpine
+    platform: linux/amd64
+    depends_on:
+      - api1
+      - api2
+    ports:
+      - "9999:9999"
+    volumes:
+      - ./docker/nginx.conf:/etc/nginx/nginx.conf:ro
+    cpus: 0.10
+    mem_limit: 20m
+    deploy:
+      resources:
+        limits:
+          cpus: "0.10"
+          memory: 20M
+    networks:
+      - anti-fraudeiro
+
+  api1:
+    image: ghcr.io/josinaldojr/anti-fraudeiro:latest
+    platform: linux/amd64
+    environment:
+      PORT: "8080"
+      GOMAXPROCS: "${GOMAXPROCS:-1}"
+      GC_PERCENT: "${GC_PERCENT:-500}"
+      MEMORY_LIMIT_MIB: "${MEMORY_LIMIT_MIB:-0}"
+      MAX_CONCURRENT_FRAUD_REQUESTS: "${MAX_CONCURRENT_FRAUD_REQUESTS:-0}"
+      BUCKET_STRATEGY: "${BUCKET_STRATEGY:-window}"
+      BUCKET_TARGET_CANDIDATES: "${BUCKET_TARGET_CANDIDATES:-256}"
+      BUCKET_MAX_SEARCH_RADIUS: "${BUCKET_MAX_SEARCH_RADIUS:-3}"
+      ENABLE_SECONDARY_BUCKET_INDEX: "${ENABLE_SECONDARY_BUCKET_INDEX:-0}"
+    cpus: 0.45
+    mem_limit: 165m
+    deploy:
+      resources:
+        limits:
+          cpus: "0.45"
+          memory: 165M
+    networks:
+      - anti-fraudeiro
+
+  api2:
+    image: ghcr.io/josinaldojr/anti-fraudeiro:latest
+    platform: linux/amd64
+    environment:
+      PORT: "8080"
+      GOMAXPROCS: "${GOMAXPROCS:-1}"
+      GC_PERCENT: "${GC_PERCENT:-500}"
+      MEMORY_LIMIT_MIB: "${MEMORY_LIMIT_MIB:-0}"
+      MAX_CONCURRENT_FRAUD_REQUESTS: "${MAX_CONCURRENT_FRAUD_REQUESTS:-0}"
+      BUCKET_STRATEGY: "${BUCKET_STRATEGY:-window}"
+      BUCKET_TARGET_CANDIDATES: "${BUCKET_TARGET_CANDIDATES:-256}"
+      BUCKET_MAX_SEARCH_RADIUS: "${BUCKET_MAX_SEARCH_RADIUS:-3}"
+      ENABLE_SECONDARY_BUCKET_INDEX: "${ENABLE_SECONDARY_BUCKET_INDEX:-0}"
+    cpus: 0.45
+    mem_limit: 165m
+    deploy:
+      resources:
+        limits:
+          cpus: "0.45"
+          memory: 165M
+    networks:
+      - anti-fraudeiro
+
+networks:
+  anti-fraudeiro:
+    driver: bridge

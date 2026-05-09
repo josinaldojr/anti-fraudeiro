@@ -9,9 +9,12 @@ COPY cmd ./cmd
 COPY internal ./internal
 COPY resources ./resources
 
+RUN test -f resources/references.bin
+RUN test -f resources/mcc_risk.json
+RUN test -f resources/normalization.json
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/anti-fraudeiro ./cmd/api
 
-FROM --platform=linux/amd64 alpine:3.22
+FROM alpine:3.22
 
 WORKDIR /app
 
@@ -25,4 +28,3 @@ USER app
 EXPOSE 8080
 
 CMD ["/app/anti-fraudeiro"]
-

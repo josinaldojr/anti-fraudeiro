@@ -98,9 +98,13 @@ func TestCustomerUsesLookupSetForLargerKnownMerchantLists(t *testing.T) {
 	t.Parallel()
 
 	customer := Customer{
-		KnownMerchants: []string{"M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9"},
+		KnownMerchants: []string{"M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12", "M13", "M14", "M15", "M16"},
 	}
 	customer.Finalize()
+
+	if len(customer.knownMerchantSet) == 0 {
+		t.Fatalf("expected lookup set to be built")
+	}
 
 	if !customer.HasKnownMerchant("M8") {
 		t.Fatalf("expected customer to know merchant M8")
@@ -108,6 +112,19 @@ func TestCustomerUsesLookupSetForLargerKnownMerchantLists(t *testing.T) {
 
 	if customer.HasKnownMerchant("M999") {
 		t.Fatalf("expected customer to not know merchant M999")
+	}
+}
+
+func TestCustomerSkipsLookupSetForSmallKnownMerchantLists(t *testing.T) {
+	t.Parallel()
+
+	customer := Customer{
+		KnownMerchants: []string{"M1", "M2", "M3"},
+	}
+	customer.Finalize()
+
+	if len(customer.knownMerchantSet) != 0 {
+		t.Fatalf("expected lookup set to remain nil for small merchant lists")
 	}
 }
 

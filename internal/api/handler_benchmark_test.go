@@ -23,7 +23,7 @@ func BenchmarkDecodeFraudScoreRequest(b *testing.B) {
 	}
 }
 
-func BenchmarkHandlerFraudScore(b *testing.B) {
+func BenchmarkFraudScoreEndToEnd(b *testing.B) {
 	b.ReportAllocs()
 
 	handler := NewHandler(newTestScorer(), 0)

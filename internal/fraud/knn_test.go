@@ -1,6 +1,7 @@
 package fraud
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/josinaldojr/anti-fraudeiro/internal/dataset"
@@ -57,6 +58,65 @@ func BenchmarkFindTop5(b *testing.B) {
 
 	for b.Loop() {
 		_ = FindTop5(query, store)
+	}
+}
+
+func BenchmarkFindTop5BucketConfigs(b *testing.B) {
+	b.ReportAllocs()
+
+	query := sampleRequestVector()
+	store := &dataset.VectorStore{
+		QuantizedVectors: benchmarkQuantizedVectors(1024),
+		Labels:           benchmarkLabels(1024),
+		Count:            1024,
+	}
+	dataset.BuildBucketIndex(store)
+
+	configurations := []searchConfig{
+		{bucketTargetCandidates: 64, bucketMaxSearchRadius: 2},
+		{bucketTargetCandidates: 128, bucketMaxSearchRadius: 2},
+		{bucketTargetCandidates: 256, bucketMaxSearchRadius: 2},
+		{bucketTargetCandidates: 128, bucketMaxSearchRadius: 3},
+		{bucketTargetCandidates: 256, bucketMaxSearchRadius: 3},
+	}
+
+	for _, cfg := range configurations {
+		cfg := cfg
+		b.Run(
+			"target_"+strconv.Itoa(cfg.bucketTargetCandidates)+"_radius_"+strconv.Itoa(cfg.bucketMaxSearchRadius),
+			func(b *testing.B) {
+				for b.Loop() {
+					_ = findTop5WithConfig(query, store, BucketStrategyWindow, cfg)
+				}
+			},
+		)
+	}
+}
+
+func TestSelectBucketWindowUsesTargetCandidates(t *testing.T) {
+	t.Parallel()
+
+	buckets := make([][]uint32, dataset.BucketIndexCount)
+	centerBucket := dataset.BucketIDFromCoordinates(0, 0, 0, 0)
+	neighborBucket := dataset.BucketIDFromCoordinates(1, 0, 0, 0)
+	buckets[centerBucket] = []uint32{1, 2, 3, 4, 5}
+	buckets[neighborBucket] = make([]uint32, 60)
+
+	_, amountEnd, _, _, _, _, _, _, candidateCount := selectBucketWindow(
+		buckets,
+		0,
+		0,
+		0,
+		0,
+		searchConfig{bucketTargetCandidates: 64, bucketMaxSearchRadius: 2},
+	)
+
+	if amountEnd < 1 {
+		t.Fatalf("expected search radius expansion to include neighbor bucket")
+	}
+
+	if candidateCount < 64 {
+		t.Fatalf("candidateCount = %d, want at least 64", candidateCount)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 )
 
 const topK = 5
+const knownMerchantSetThreshold = 16
 
 type FraudScoreRequest struct {
 	ID              string           `json:"id"`
@@ -58,12 +59,7 @@ type Timestamp struct {
 }
 
 func (t *Timestamp) UnmarshalJSON(data []byte) error {
-	value, err := parseJSONString(data)
-	if err != nil {
-		return fmt.Errorf("timestamp must be an RFC3339 string: %w", err)
-	}
-
-	parsed, err := ParseTimestamp(value)
+	parsed, err := parseTimestampJSON(data)
 	if err != nil {
 		return err
 	}
@@ -81,6 +77,10 @@ func (t Timestamp) UnixNano() int64 {
 }
 
 func ParseTimestamp(value string) (Timestamp, error) {
+	if parsed, ok := parseTimestampRFC3339UTCString(value); ok {
+		return parsed, nil
+	}
+
 	parsed, err := time.Parse(time.RFC3339, value)
 	if err != nil {
 		return Timestamp{}, fmt.Errorf("invalid RFC3339 timestamp %q: %w", value, err)
@@ -109,7 +109,11 @@ func (c Customer) HasKnownMerchant(merchantID string) bool {
 }
 
 func buildKnownMerchantSet(knownMerchants []string) map[string]struct{} {
-	if len(knownMerchants) < 8 {
+	return buildKnownMerchantSetWithThreshold(knownMerchants, knownMerchantSetThreshold)
+}
+
+func buildKnownMerchantSetWithThreshold(knownMerchants []string, threshold int) map[string]struct{} {
+	if len(knownMerchants) < threshold {
 		return nil
 	}
 
@@ -137,4 +141,98 @@ func parseJSONString(data []byte) (string, error) {
 	}
 
 	return value, nil
+}
+
+func parseTimestampJSON(data []byte) (Timestamp, error) {
+	if len(data) < 2 || data[0] != '"' || data[len(data)-1] != '"' {
+		return Timestamp{}, fmt.Errorf("timestamp must be an RFC3339 string: invalid JSON string")
+	}
+
+	raw := data[1 : len(data)-1]
+	if bytes.IndexByte(raw, '\\') == -1 {
+		if parsed, ok := parseTimestampRFC3339UTCBytes(raw); ok {
+			return parsed, nil
+		}
+		return ParseTimestamp(string(raw))
+	}
+
+	value, err := strconv.Unquote(string(data))
+	if err != nil {
+		return Timestamp{}, fmt.Errorf("timestamp must be an RFC3339 string: %w", err)
+	}
+
+	return ParseTimestamp(value)
+}
+
+func parseTimestampRFC3339UTCString(value string) (Timestamp, bool) {
+	if len(value) != len("2026-03-11T20:23:35Z") {
+		return Timestamp{}, false
+	}
+
+	return parseTimestampRFC3339UTCBytes([]byte(value))
+}
+
+func parseTimestampRFC3339UTCBytes(value []byte) (Timestamp, bool) {
+	if len(value) != len("2026-03-11T20:23:35Z") {
+		return Timestamp{}, false
+	}
+	if value[4] != '-' || value[7] != '-' || value[10] != 'T' || value[13] != ':' || value[16] != ':' || value[19] != 'Z' {
+		return Timestamp{}, false
+	}
+
+	year, ok := parse4Digits(value[0], value[1], value[2], value[3])
+	if !ok {
+		return Timestamp{}, false
+	}
+	month, ok := parse2Digits(value[5], value[6])
+	if !ok {
+		return Timestamp{}, false
+	}
+	day, ok := parse2Digits(value[8], value[9])
+	if !ok {
+		return Timestamp{}, false
+	}
+	hour, ok := parse2Digits(value[11], value[12])
+	if !ok {
+		return Timestamp{}, false
+	}
+	minute, ok := parse2Digits(value[14], value[15])
+	if !ok {
+		return Timestamp{}, false
+	}
+	second, ok := parse2Digits(value[17], value[18])
+	if !ok {
+		return Timestamp{}, false
+	}
+	if month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 || second > 59 {
+		return Timestamp{}, false
+	}
+
+	parsed := time.Date(year, time.Month(month), day, hour, minute, second, 0, time.UTC)
+	if parsed.Year() != year || parsed.Month() != time.Month(month) || parsed.Day() != day || parsed.Hour() != hour || parsed.Minute() != minute || parsed.Second() != second {
+		return Timestamp{}, false
+	}
+
+	return Timestamp{unixNano: parsed.UnixNano()}, true
+}
+
+func parse2Digits(left byte, right byte) (int, bool) {
+	if left < '0' || left > '9' || right < '0' || right > '9' {
+		return 0, false
+	}
+
+	return int(left-'0')*10 + int(right-'0'), true
+}
+
+func parse4Digits(a byte, b byte, c byte, d byte) (int, bool) {
+	ab, ok := parse2Digits(a, b)
+	if !ok {
+		return 0, false
+	}
+	cd, ok := parse2Digits(c, d)
+	if !ok {
+		return 0, false
+	}
+
+	return ab*100 + cd, true
 }
