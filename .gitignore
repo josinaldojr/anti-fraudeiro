@@ -1,8 +1,0 @@
-bin/
-coverage.out
-dist/
-.gocache/
-.gomodcache/
-.tmp/
-*.exe
-resources/references.bin
