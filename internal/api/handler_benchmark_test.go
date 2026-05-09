@@ -15,13 +15,9 @@ func BenchmarkDecodeFraudScoreRequest(b *testing.B) {
 	for b.Loop() {
 		request := httptest.NewRequest(http.MethodPost, "/fraud-score", strings.NewReader(body))
 		request.Header.Set("Content-Type", "application/json")
+		recorder := httptest.NewRecorder()
 
-		payload, err := decodeFraudScoreRequest(request.Body)
-		if err != nil {
-			b.Fatalf("decodeFraudScoreRequest returned error: %v", err)
-		}
-
-		if _, err := unmarshalFraudScoreRequest(payload); err != nil {
+		if _, err := decodeFraudScoreRequest(recorder, request); err != nil {
 			b.Fatalf("decodeFraudScoreRequest returned error: %v", err)
 		}
 	}
@@ -30,7 +26,7 @@ func BenchmarkDecodeFraudScoreRequest(b *testing.B) {
 func BenchmarkHandlerFraudScore(b *testing.B) {
 	b.ReportAllocs()
 
-	handler := NewHandler(newTestScorer())
+	handler := NewHandler(newTestScorer(), 0)
 	body := validFraudScoreRequestJSON()
 
 	for b.Loop() {

@@ -27,6 +27,9 @@ services:
     platform: linux/amd64
     environment:
       PORT: "8080"
+      GOMAXPROCS: "1"
+      GC_PERCENT: "100"
+      MAX_CONCURRENT_FRAUD_REQUESTS: "0"
     cpus: 0.45
     mem_limit: 165m
     deploy:
@@ -45,6 +48,9 @@ services:
     platform: linux/amd64
     environment:
       PORT: "8080"
+      GOMAXPROCS: "1"
+      GC_PERCENT: "100"
+      MAX_CONCURRENT_FRAUD_REQUESTS: "0"
     cpus: 0.45
     mem_limit: 165m
     deploy:

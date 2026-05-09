@@ -1,9 +1,9 @@
 package api
 
 import (
-	"bytes"
 	"errors"
 	"io"
+	"net/http"
 
 	json "github.com/goccy/go-json"
 	"github.com/josinaldojr/anti-fraudeiro/internal/fraud"
@@ -13,21 +13,6 @@ var (
 	errRequestTooLarge = errors.New("request payload too large")
 	errTrailingJSON    = errors.New("trailing json payload")
 )
-
-func decodeFraudScoreRequest(r io.Reader) (requestPayload []byte, err error) {
-	limitedBody := &io.LimitedReader{R: r, N: maxFraudScoreRequestBodyBytes + 1}
-
-	requestPayload, err = io.ReadAll(limitedBody)
-	if err != nil {
-		return nil, err
-	}
-
-	if int64(len(requestPayload)) > maxFraudScoreRequestBodyBytes {
-		return nil, errRequestTooLarge
-	}
-
-	return requestPayload, nil
-}
 
 func rejectTrailingJSON(decoder interface{ Decode(v any) error }) error {
 	var trailing json.RawMessage
@@ -41,19 +26,38 @@ func rejectTrailingJSON(decoder interface{ Decode(v any) error }) error {
 	return nil
 }
 
-func unmarshalFraudScoreRequest(payload []byte) (fraud.FraudScoreRequest, error) {
-	var request fraud.FraudScoreRequest
+func decodeFraudScoreRequest(w http.ResponseWriter, r *http.Request) (fraud.FraudScoreRequest, error) {
+	limitedBody := http.MaxBytesReader(w, r.Body, maxFraudScoreRequestBodyBytes)
+	defer limitedBody.Close()
 
-	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder := json.NewDecoder(limitedBody)
 	decoder.DisallowUnknownFields()
 
+	var request fraud.FraudScoreRequest
 	if err := decoder.Decode(&request); err != nil {
+		var maxBytesError *http.MaxBytesError
+		if errors.As(err, &maxBytesError) {
+			return fraud.FraudScoreRequest{}, errRequestTooLarge
+		}
 		return fraud.FraudScoreRequest{}, err
 	}
 
 	if err := rejectTrailingJSON(decoder); err != nil {
+		var maxBytesError *http.MaxBytesError
+		if errors.As(err, &maxBytesError) {
+			return fraud.FraudScoreRequest{}, errRequestTooLarge
+		}
 		return fraud.FraudScoreRequest{}, err
 	}
 
+	if _, err := io.Copy(io.Discard, limitedBody); err != nil {
+		var maxBytesError *http.MaxBytesError
+		if errors.As(err, &maxBytesError) {
+			return fraud.FraudScoreRequest{}, errRequestTooLarge
+		}
+		return fraud.FraudScoreRequest{}, err
+	}
+
+	request.Customer.Finalize()
 	return request, nil
 }

@@ -14,7 +14,7 @@ import (
 func TestFraudScoreRejectsTrailingJSON(t *testing.T) {
 	t.Parallel()
 
-	handler := NewHandler(newTestScorer())
+	handler := NewHandler(newTestScorer(), 0)
 	body := validFraudScoreRequestJSON() + `{"extra":true}`
 	request := httptest.NewRequest(http.MethodPost, "/fraud-score", strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
@@ -30,7 +30,7 @@ func TestFraudScoreRejectsTrailingJSON(t *testing.T) {
 func TestFraudScoreRejectsPayloadTooLarge(t *testing.T) {
 	t.Parallel()
 
-	handler := NewHandler(newTestScorer())
+	handler := NewHandler(newTestScorer(), 0)
 	body := validFraudScoreRequestJSON() + strings.Repeat(" ", int(maxFraudScoreRequestBodyBytes))
 	request := httptest.NewRequest(http.MethodPost, "/fraud-score", strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
@@ -46,7 +46,7 @@ func TestFraudScoreRejectsPayloadTooLarge(t *testing.T) {
 func TestFraudScoreAcceptsValidPayload(t *testing.T) {
 	t.Parallel()
 
-	handler := NewHandler(newTestScorer())
+	handler := NewHandler(newTestScorer(), 0)
 	request := httptest.NewRequest(http.MethodPost, "/fraud-score", strings.NewReader(validFraudScoreRequestJSON()))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()

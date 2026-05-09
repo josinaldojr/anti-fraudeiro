@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"strconv"
 	"time"
-
-	json "github.com/goccy/go-json"
 )
 
 const topK = 5
@@ -89,26 +87,6 @@ func ParseTimestamp(value string) (Timestamp, error) {
 	}
 
 	return Timestamp{unixNano: parsed.UTC().UnixNano()}, nil
-}
-
-func (c *Customer) UnmarshalJSON(data []byte) error {
-	type customerAlias struct {
-		AvgAmount      float64  `json:"avg_amount"`
-		TxCount24h     int      `json:"tx_count_24h"`
-		KnownMerchants []string `json:"known_merchants"`
-	}
-
-	var decoded customerAlias
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		return err
-	}
-
-	c.AvgAmount = decoded.AvgAmount
-	c.TxCount24h = decoded.TxCount24h
-	c.KnownMerchants = decoded.KnownMerchants
-	c.knownMerchantSet = buildKnownMerchantSet(decoded.KnownMerchants)
-
-	return nil
 }
 
 func (c *Customer) Finalize() {

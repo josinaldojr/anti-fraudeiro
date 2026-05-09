@@ -15,14 +15,21 @@ func NewScorer(vectorizer *Vectorizer, store *dataset.VectorStore) *Scorer {
 }
 
 func (s *Scorer) Score(request FraudScoreRequest) (Decision, error) {
-	vector, err := s.vectorizer.Vectorize(request)
+	fraudCount, err := s.ScoreFraudCount(request)
 	if err != nil {
 		return Decision{}, err
 	}
 
-	fraudCount := FindTop5(vector, s.store)
-
 	return decisionFromFraudCount(fraudCount), nil
+}
+
+func (s *Scorer) ScoreFraudCount(request FraudScoreRequest) (int, error) {
+	vector, err := s.vectorizer.Vectorize(request)
+	if err != nil {
+		return 0, err
+	}
+
+	return FindTop5(vector, s.store), nil
 }
 
 func decisionFromFraudCount(fraudCount int) Decision {

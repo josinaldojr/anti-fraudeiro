@@ -11,10 +11,14 @@ const maxFraudScoreRequestBodyBytes int64 = 16 * 1024
 
 type Handler struct {
 	scorer *fraud.Scorer
+	limiter *fraudScoreLimiter
 }
 
-func NewHandler(scorer *fraud.Scorer) *Handler {
-	return &Handler{scorer: scorer}
+func NewHandler(scorer *fraud.Scorer, maxConcurrentFraudRequests int) *Handler {
+	return &Handler{
+		scorer: scorer,
+		limiter: newFraudScoreLimiter(maxConcurrentFraudRequests),
+	}
 }
 
 func (h *Handler) Ready(w http.ResponseWriter, r *http.Request) {
@@ -32,7 +36,7 @@ func (h *Handler) FraudScore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	requestPayload, err := decodeFraudScoreRequest(r.Body)
+	request, err := decodeFraudScoreRequest(w, r)
 	if err != nil {
 		if errors.Is(err, errRequestTooLarge) {
 			writeJSON(w, http.StatusRequestEntityTooLarge, ErrorResponse{Error: "request payload too large"})
@@ -43,20 +47,17 @@ func (h *Handler) FraudScore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	request, err := unmarshalFraudScoreRequest(requestPayload)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid request payload"})
+	if err := h.limiter.Acquire(r.Context()); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, ErrorResponse{Error: "request canceled"})
 		return
 	}
+	defer h.limiter.Release()
 
-	decision, err := h.scorer.Score(request)
+	fraudCount, err := h.scorer.ScoreFraudCount(request)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: err.Error()})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, FraudScoreResponse{
-		Approved:   decision.Approved,
-		FraudScore: decision.FraudScore,
-	})
+	writeFraudScoreJSON(w, http.StatusOK, fraudCount)
 }

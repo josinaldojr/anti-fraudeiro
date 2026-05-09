@@ -80,6 +80,10 @@ Environment variables:
 - `REFERENCES_PATH`
 - `MCC_RISK_PATH`
 - `NORMALIZATION_PATH`
+- `GOMAXPROCS`
+- `GC_PERCENT`
+- `MEMORY_LIMIT_MIB`
+- `MAX_CONCURRENT_FRAUD_REQUESTS`
 
 Default HTTP port is `9999`.
 
@@ -221,6 +225,7 @@ Useful commands:
 - The application instances run behind the load balancer on port `8080`.
 - The dataset loader supports compact binary, plain JSON, and `gzip`-compressed JSON.
 - The current reference store is kept in contiguous slices for lower overhead on the hot path.
+- Runtime tuning is configurable through `GOMAXPROCS`, `GC_PERCENT`, `MEMORY_LIMIT_MIB`, and `MAX_CONCURRENT_FRAUD_REQUESTS`.
 
 ## Challenge References
 

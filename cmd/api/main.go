@@ -3,6 +3,8 @@ package main
 import (
 	"log"
 	"net/http"
+	"runtime"
+	"runtime/debug"
 	"time"
 
 	"github.com/josinaldojr/anti-fraudeiro/internal/api"
@@ -19,6 +21,7 @@ func main() {
 
 func run() error {
 	cfg := config.Load()
+	applyRuntimeTuning(cfg)
 
 	normalization, err := config.LoadNormalization(cfg.NormalizationPath)
 	if err != nil {
@@ -37,7 +40,7 @@ func run() error {
 
 	vectorizer := fraud.NewVectorizer(normalization, mccRisk)
 	scorer := fraud.NewScorer(vectorizer, store)
-	handler := api.NewHandler(scorer)
+	handler := api.NewHandler(scorer, cfg.MaxConcurrentFraudRequests)
 
 	server := &http.Server{
 		Addr:              cfg.ListenAddr(),
@@ -46,7 +49,29 @@ func run() error {
 		IdleTimeout:       30 * time.Second,
 	}
 
-	log.Printf("anti-fraudeiro listening on %s with %d reference vectors", cfg.ListenAddr(), store.Count)
+	log.Printf(
+		"anti-fraudeiro listening on %s with %d reference vectors (gomaxprocs=%d gc_percent=%d memory_limit_mib=%d max_concurrent_fraud_requests=%d)",
+		cfg.ListenAddr(),
+		store.Count,
+		runtime.GOMAXPROCS(0),
+		cfg.GCPercent,
+		cfg.MemoryLimitMiB,
+		cfg.MaxConcurrentFraudRequests,
+	)
 
 	return server.ListenAndServe()
+}
+
+func applyRuntimeTuning(cfg config.Config) {
+	if cfg.GOMAXPROCS > 0 {
+		runtime.GOMAXPROCS(cfg.GOMAXPROCS)
+	}
+
+	if cfg.GCPercent >= 0 {
+		debug.SetGCPercent(cfg.GCPercent)
+	}
+
+	if cfg.MemoryLimitMiB > 0 {
+		debug.SetMemoryLimit(cfg.MemoryLimitMiB << 20)
+	}
 }

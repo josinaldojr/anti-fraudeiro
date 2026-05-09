@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/josinaldojr/anti-fraudeiro/internal/dataset"
@@ -15,6 +16,10 @@ type Config struct {
 	ReferencesPath    string
 	MCCRiskPath       string
 	NormalizationPath string
+	GOMAXPROCS        int
+	GCPercent         int
+	MemoryLimitMiB    int64
+	MaxConcurrentFraudRequests int
 }
 
 type Normalization struct {
@@ -42,6 +47,10 @@ func Load() Config {
 		ReferencesPath:    envOrDefault("REFERENCES_PATH", defaultReferencesPath),
 		MCCRiskPath:       envOrDefault("MCC_RISK_PATH", filepath.Join(resourceDir, "mcc_risk.json")),
 		NormalizationPath: envOrDefault("NORMALIZATION_PATH", filepath.Join(resourceDir, "normalization.json")),
+		GOMAXPROCS:        envIntOrDefault("GOMAXPROCS", 0),
+		GCPercent:         envIntOrDefault("GC_PERCENT", 100),
+		MemoryLimitMiB:    envInt64OrDefault("MEMORY_LIMIT_MIB", 0),
+		MaxConcurrentFraudRequests: envIntOrDefault("MAX_CONCURRENT_FRAUD_REQUESTS", 0),
 	}
 }
 
@@ -87,4 +96,32 @@ func envOrDefault(key string, fallback string) string {
 	}
 
 	return fallback
+}
+
+func envIntOrDefault(key string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+
+	return parsed
+}
+
+func envInt64OrDefault(key string, fallback int64) int64 {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return fallback
+	}
+
+	return parsed
 }
