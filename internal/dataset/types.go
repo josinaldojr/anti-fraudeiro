@@ -1,25 +1,25 @@
 package dataset
 
 const (
-	VectorSize              = 14
-	LabelLegit              = byte(0)
-	LabelFraud              = byte(1)
-	BinaryFormatVersionV2   = uint32(2)
-	BinaryFormatVersion     = uint32(3)
-	BinaryReferenceFile     = "references.bin"
-	CompressedReferenceFile = "references.json.gz"
-	ExampleReferenceFile    = "example-references.json"
-	AmountBucketCount       = 32
-	HourBucketCount         = 24
-	DayBucketCount          = 7
-	Tx24hBucketCount        = 16
-	RiskBucketCount         = 8
-	BucketIndexCount        = AmountBucketCount * HourBucketCount * DayBucketCount * Tx24hBucketCount
+	VectorSize                = 14
+	LabelLegit                = byte(0)
+	LabelFraud                = byte(1)
+	BinaryFormatVersionV2     = uint32(2)
+	BinaryFormatVersion       = uint32(3)
+	BinaryReferenceFile       = "references.bin"
+	CompressedReferenceFile   = "references.json.gz"
+	ExampleReferenceFile      = "example-references.json"
+	AmountBucketCount         = 32
+	HourBucketCount           = 24
+	DayBucketCount            = 7
+	Tx24hBucketCount          = 16
+	RiskBucketCount           = 8
+	BucketIndexCount          = AmountBucketCount * HourBucketCount * DayBucketCount * Tx24hBucketCount
 	SecondaryBucketIndexCount = AmountBucketCount * HourBucketCount * DayBucketCount * RiskBucketCount
-	quantizedMinValue       = float32(-1)
-	quantizedMaxValue       = float32(1)
-	quantizedOffset         = float32(32767.5)
-	quantizedScale          = float32(32767.5)
+	quantizedMinValue         = float32(-1)
+	quantizedMaxValue         = float32(1)
+	quantizedOffset           = float32(32767.5)
+	quantizedScale            = float32(32767.5)
 )
 
 type ReferenceRecord struct {
@@ -28,11 +28,11 @@ type ReferenceRecord struct {
 }
 
 type VectorStore struct {
-	Vectors          []float32
-	QuantizedVectors []uint16
-	Labels           []byte
-	Count            int
-	BucketIndex      [][]uint32
+	Vectors              []float32
+	QuantizedVectors     []uint16
+	Labels               []byte
+	Count                int
+	BucketIndex          [][]uint32
 	SecondaryBucketIndex [][]uint32
 }
 
