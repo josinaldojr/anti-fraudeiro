@@ -39,7 +39,8 @@ func run() error {
 	}
 
 	vectorizer := fraud.NewVectorizer(normalization, mccRisk)
-	scorer := fraud.NewScorer(vectorizer, store)
+	bucketStrategy := fraud.NormalizeBucketStrategy(cfg.BucketStrategy)
+	scorer := fraud.NewScorer(vectorizer, store, bucketStrategy)
 	handler := api.NewHandler(scorer, cfg.MaxConcurrentFraudRequests)
 
 	server := &http.Server{
@@ -50,13 +51,14 @@ func run() error {
 	}
 
 	log.Printf(
-		"anti-fraudeiro listening on %s with %d reference vectors (gomaxprocs=%d gc_percent=%d memory_limit_mib=%d max_concurrent_fraud_requests=%d)",
+		"anti-fraudeiro listening on %s with %d reference vectors (gomaxprocs=%d gc_percent=%d memory_limit_mib=%d max_concurrent_fraud_requests=%d bucket_strategy=%s)",
 		cfg.ListenAddr(),
 		store.Count,
 		runtime.GOMAXPROCS(0),
 		cfg.GCPercent,
 		cfg.MemoryLimitMiB,
 		cfg.MaxConcurrentFraudRequests,
+		bucketStrategy,
 	)
 
 	return server.ListenAndServe()

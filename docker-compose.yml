@@ -31,6 +31,7 @@ services:
       GC_PERCENT: "${GC_PERCENT:-500}"
       MEMORY_LIMIT_MIB: "${MEMORY_LIMIT_MIB:-0}"
       MAX_CONCURRENT_FRAUD_REQUESTS: "${MAX_CONCURRENT_FRAUD_REQUESTS:-0}"
+      BUCKET_STRATEGY: "${BUCKET_STRATEGY:-window}"
     cpus: 0.45
     mem_limit: 165m
     deploy:
@@ -53,6 +54,7 @@ services:
       GC_PERCENT: "${GC_PERCENT:-500}"
       MEMORY_LIMIT_MIB: "${MEMORY_LIMIT_MIB:-0}"
       MAX_CONCURRENT_FRAUD_REQUESTS: "${MAX_CONCURRENT_FRAUD_REQUESTS:-0}"
+      BUCKET_STRATEGY: "${BUCKET_STRATEGY:-window}"
     cpus: 0.45
     mem_limit: 165m
     deploy:

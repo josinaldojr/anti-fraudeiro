@@ -34,6 +34,14 @@ func TestFindTop5(t *testing.T) {
 	if fraudCount := FindTop5(query, store); fraudCount != 3 {
 		t.Fatalf("FindTop5 fraud count = %d, want 3", fraudCount)
 	}
+
+	if fraudCount := FindTop5WithStrategy(query, store, BucketStrategyOrdered); fraudCount != 3 {
+		t.Fatalf("FindTop5WithStrategy ordered fraud count = %d, want 3", fraudCount)
+	}
+
+	if fraudCount := FindTop5Exact(query, store); fraudCount != 3 {
+		t.Fatalf("FindTop5Exact fraud count = %d, want 3", fraudCount)
+	}
 }
 
 func BenchmarkFindTop5(b *testing.B) {

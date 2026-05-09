@@ -12,14 +12,15 @@ import (
 )
 
 type Config struct {
-	HTTPPort          string
-	ReferencesPath    string
-	MCCRiskPath       string
-	NormalizationPath string
-	GOMAXPROCS        int
-	GCPercent         int
-	MemoryLimitMiB    int64
+	HTTPPort                   string
+	ReferencesPath             string
+	MCCRiskPath                string
+	NormalizationPath          string
+	GOMAXPROCS                 int
+	GCPercent                  int
+	MemoryLimitMiB             int64
 	MaxConcurrentFraudRequests int
+	BucketStrategy             string
 }
 
 type Normalization struct {
@@ -43,14 +44,15 @@ func Load() Config {
 	}
 
 	return Config{
-		HTTPPort:          envOrDefault("PORT", "9999"),
-		ReferencesPath:    envOrDefault("REFERENCES_PATH", defaultReferencesPath),
-		MCCRiskPath:       envOrDefault("MCC_RISK_PATH", filepath.Join(resourceDir, "mcc_risk.json")),
-		NormalizationPath: envOrDefault("NORMALIZATION_PATH", filepath.Join(resourceDir, "normalization.json")),
-		GOMAXPROCS:        envIntOrDefault("GOMAXPROCS", 0),
-		GCPercent:         envIntOrDefault("GC_PERCENT", 100),
-		MemoryLimitMiB:    envInt64OrDefault("MEMORY_LIMIT_MIB", 0),
+		HTTPPort:                   envOrDefault("PORT", "9999"),
+		ReferencesPath:             envOrDefault("REFERENCES_PATH", defaultReferencesPath),
+		MCCRiskPath:                envOrDefault("MCC_RISK_PATH", filepath.Join(resourceDir, "mcc_risk.json")),
+		NormalizationPath:          envOrDefault("NORMALIZATION_PATH", filepath.Join(resourceDir, "normalization.json")),
+		GOMAXPROCS:                 envIntOrDefault("GOMAXPROCS", 0),
+		GCPercent:                  envIntOrDefault("GC_PERCENT", 100),
+		MemoryLimitMiB:             envInt64OrDefault("MEMORY_LIMIT_MIB", 0),
 		MaxConcurrentFraudRequests: envIntOrDefault("MAX_CONCURRENT_FRAUD_REQUESTS", 0),
+		BucketStrategy:             envOrDefault("BUCKET_STRATEGY", "window"),
 	}
 }
 

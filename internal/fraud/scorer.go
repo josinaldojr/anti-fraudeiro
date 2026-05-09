@@ -5,12 +5,19 @@ import "github.com/josinaldojr/anti-fraudeiro/internal/dataset"
 type Scorer struct {
 	vectorizer *Vectorizer
 	store      *dataset.VectorStore
+	strategy   BucketStrategy
 }
 
-func NewScorer(vectorizer *Vectorizer, store *dataset.VectorStore) *Scorer {
+func NewScorer(vectorizer *Vectorizer, store *dataset.VectorStore, strategies ...BucketStrategy) *Scorer {
+	strategy := BucketStrategyWindow
+	if len(strategies) > 0 {
+		strategy = strategies[0]
+	}
+
 	return &Scorer{
 		vectorizer: vectorizer,
 		store:      store,
+		strategy:   strategy,
 	}
 }
 
@@ -29,7 +36,7 @@ func (s *Scorer) ScoreFraudCount(request FraudScoreRequest) (int, error) {
 		return 0, err
 	}
 
-	return FindTop5(vector, s.store), nil
+	return FindTop5WithStrategy(vector, s.store, s.strategy), nil
 }
 
 func decisionFromFraudCount(fraudCount int) Decision {
