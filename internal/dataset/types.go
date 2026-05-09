@@ -13,7 +13,9 @@ const (
 	HourBucketCount         = 24
 	DayBucketCount          = 7
 	Tx24hBucketCount        = 16
+	RiskBucketCount         = 8
 	BucketIndexCount        = AmountBucketCount * HourBucketCount * DayBucketCount * Tx24hBucketCount
+	SecondaryBucketIndexCount = AmountBucketCount * HourBucketCount * DayBucketCount * RiskBucketCount
 	quantizedMinValue       = float32(-1)
 	quantizedMaxValue       = float32(1)
 	quantizedOffset         = float32(32767.5)
@@ -31,6 +33,7 @@ type VectorStore struct {
 	Labels           []byte
 	Count            int
 	BucketIndex      [][]uint32
+	SecondaryBucketIndex [][]uint32
 }
 
 func QuantizeComponent(value float32) uint16 {

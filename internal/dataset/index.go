@@ -13,6 +13,7 @@ func BuildBucketIndex(store *VectorStore) {
 			buckets[bucketID] = append(buckets[bucketID], uint32(recordIndex))
 		}
 		store.BucketIndex = buckets
+		store.SecondaryBucketIndex = nil
 		return
 	}
 
@@ -22,6 +23,7 @@ func BuildBucketIndex(store *VectorStore) {
 	}
 
 	store.BucketIndex = buckets
+	store.SecondaryBucketIndex = nil
 }
 
 func BucketIDFromQuery(amount float32, hour float32, day float32, tx24h float32) int {
@@ -39,6 +41,17 @@ func BucketCoordinatesFromQuery(amount float32, hour float32, day float32, tx24h
 
 func BucketIDFromCoordinates(amountBucket int, hourBucket int, dayBucket int, tx24hBucket int) int {
 	return bucketID(amountBucket, hourBucket, dayBucket, tx24hBucket)
+}
+
+func SecondaryBucketCoordinatesFromQuery(amount float32, hour float32, day float32, risk float32) (int, int, int, int) {
+	return scalarBucket(amount, AmountBucketCount),
+		scalarBucket(hour, HourBucketCount),
+		scalarBucket(day, DayBucketCount),
+		scalarBucket(risk, RiskBucketCount)
+}
+
+func SecondaryBucketIDFromCoordinates(amountBucket int, hourBucket int, dayBucket int, riskBucket int) int {
+	return secondaryBucketID(amountBucket, hourBucket, dayBucket, riskBucket)
 }
 
 func bucketIDFromFloat32(vectors []float32, baseOffset int) int {
@@ -59,8 +72,30 @@ func bucketIDFromQuantized(vectors []uint16, baseOffset int) int {
 	)
 }
 
+func secondaryBucketIDFromFloat32(vectors []float32, baseOffset int) int {
+	return secondaryBucketID(
+		scalarBucket(vectors[baseOffset], AmountBucketCount),
+		scalarBucket(vectors[baseOffset+3], HourBucketCount),
+		scalarBucket(vectors[baseOffset+4], DayBucketCount),
+		scalarBucket(vectors[baseOffset+12], RiskBucketCount),
+	)
+}
+
+func secondaryBucketIDFromQuantized(vectors []uint16, baseOffset int) int {
+	return secondaryBucketID(
+		quantizedScalarBucket(vectors[baseOffset], AmountBucketCount),
+		quantizedScalarBucket(vectors[baseOffset+3], HourBucketCount),
+		quantizedScalarBucket(vectors[baseOffset+4], DayBucketCount),
+		quantizedScalarBucket(vectors[baseOffset+12], RiskBucketCount),
+	)
+}
+
 func bucketID(amountBucket int, hourBucket int, dayBucket int, tx24hBucket int) int {
 	return (((amountBucket * HourBucketCount) + hourBucket) * DayBucketCount + dayBucket) * Tx24hBucketCount + tx24hBucket
+}
+
+func secondaryBucketID(amountBucket int, hourBucket int, dayBucket int, riskBucket int) int {
+	return (((amountBucket * HourBucketCount) + hourBucket) * DayBucketCount + dayBucket) * RiskBucketCount + riskBucket
 }
 
 func scalarBucket(value float32, bucketCount int) int {

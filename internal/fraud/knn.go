@@ -7,8 +7,11 @@ import (
 )
 
 const (
-	bucketTargetCandidates = 256
-	bucketMaxSearchRadius  = 2
+	bucketTargetCandidates   = 256
+	bucketMaxSearchRadius    = 2
+	candidateSeenLimit       = 4096
+	secondaryFallbackMaxPrimaryCandidates = 96
+	secondaryFallbackMaxBucketSize        = 256
 )
 
 func FindTop5(query [14]float32, store *dataset.VectorStore) (fraudCount int) {
@@ -122,48 +125,107 @@ func findTop5Float32Bucketed(query [14]float32, store *dataset.VectorStore, best
 		return findTop5Float32(query, &dataset.VectorStore{Vectors: vectors, Labels: labels, Count: store.Count})
 	}
 
+	trackSeen := len(store.SecondaryBucketIndex) > 0
+	var seen [candidateSeenLimit]uint32
+	seenCount := 0
+
 	for amountIndex := amountStart; amountIndex <= amountEnd; amountIndex++ {
 		for hourIndex := hourStart; hourIndex <= hourEnd; hourIndex++ {
 			for dayIndex := dayStart; dayIndex <= dayEnd; dayIndex++ {
 				for txIndex := txStart; txIndex <= txEnd; txIndex++ {
 					bucketID := dataset.BucketIDFromCoordinates(amountIndex, hourIndex, dayIndex, txIndex)
 					for _, vectorIndex := range store.BucketIndex[bucketID] {
-				baseOffset := int(vectorIndex) * dataset.VectorSize
-				delta0 := q0 - vectors[baseOffset]
-				delta1 := q1 - vectors[baseOffset+1]
-				delta2 := q2 - vectors[baseOffset+2]
-				delta3 := q3 - vectors[baseOffset+3]
-				delta4 := q4 - vectors[baseOffset+4]
-				delta5 := q5 - vectors[baseOffset+5]
-				delta6 := q6 - vectors[baseOffset+6]
-				delta7 := q7 - vectors[baseOffset+7]
-				delta8 := q8 - vectors[baseOffset+8]
-				delta9 := q9 - vectors[baseOffset+9]
-				delta10 := q10 - vectors[baseOffset+10]
-				delta11 := q11 - vectors[baseOffset+11]
-				delta12 := q12 - vectors[baseOffset+12]
-				delta13 := q13 - vectors[baseOffset+13]
+						if trackSeen && seenCount < candidateSeenLimit {
+							seen[seenCount] = vectorIndex
+							seenCount++
+						}
+						baseOffset := int(vectorIndex) * dataset.VectorSize
+						delta0 := q0 - vectors[baseOffset]
+						delta1 := q1 - vectors[baseOffset+1]
+						delta2 := q2 - vectors[baseOffset+2]
+						delta3 := q3 - vectors[baseOffset+3]
+						delta4 := q4 - vectors[baseOffset+4]
+						delta5 := q5 - vectors[baseOffset+5]
+						delta6 := q6 - vectors[baseOffset+6]
+						delta7 := q7 - vectors[baseOffset+7]
+						delta8 := q8 - vectors[baseOffset+8]
+						delta9 := q9 - vectors[baseOffset+9]
+						delta10 := q10 - vectors[baseOffset+10]
+						delta11 := q11 - vectors[baseOffset+11]
+						delta12 := q12 - vectors[baseOffset+12]
+						delta13 := q13 - vectors[baseOffset+13]
 
-				distance := delta0*delta0 +
-					delta1*delta1 +
-					delta2*delta2 +
-					delta3*delta3 +
-					delta4*delta4 +
-					delta5*delta5 +
-					delta6*delta6 +
-					delta7*delta7 +
-					delta8*delta8 +
-					delta9*delta9 +
-					delta10*delta10 +
-					delta11*delta11 +
-					delta12*delta12 +
-					delta13*delta13
-				if distance < bestDistances[topK-1] {
-					insertTopK(distance, labels[vectorIndex], &bestDistances, &bestLabels)
+						distance := delta0*delta0 +
+							delta1*delta1 +
+							delta2*delta2 +
+							delta3*delta3 +
+							delta4*delta4 +
+							delta5*delta5 +
+							delta6*delta6 +
+							delta7*delta7 +
+							delta8*delta8 +
+							delta9*delta9 +
+							delta10*delta10 +
+							delta11*delta11 +
+							delta12*delta12 +
+							delta13*delta13
+						if distance < bestDistances[topK-1] {
+							insertTopK(distance, labels[vectorIndex], &bestDistances, &bestLabels)
+						}
+					}
 				}
 			}
-				}
+		}
+	}
+
+	if trackSeen && candidateCount <= secondaryFallbackMaxPrimaryCandidates {
+		amountBucket2, hourBucket2, dayBucket2, riskBucket2 := dataset.SecondaryBucketCoordinatesFromQuery(q0, q3, q4, q12)
+		secondaryBucketID := dataset.SecondaryBucketIDFromCoordinates(amountBucket2, hourBucket2, dayBucket2, riskBucket2)
+		secondaryCandidates := store.SecondaryBucketIndex[secondaryBucketID]
+		if len(secondaryCandidates) <= secondaryFallbackMaxBucketSize {
+			for _, vectorIndex := range secondaryCandidates {
+			if containsCandidateID(seen[:seenCount], vectorIndex) {
+				continue
 			}
+			if seenCount < candidateSeenLimit {
+				seen[seenCount] = vectorIndex
+				seenCount++
+			}
+
+			baseOffset := int(vectorIndex) * dataset.VectorSize
+			delta0 := q0 - vectors[baseOffset]
+			delta1 := q1 - vectors[baseOffset+1]
+			delta2 := q2 - vectors[baseOffset+2]
+			delta3 := q3 - vectors[baseOffset+3]
+			delta4 := q4 - vectors[baseOffset+4]
+			delta5 := q5 - vectors[baseOffset+5]
+			delta6 := q6 - vectors[baseOffset+6]
+			delta7 := q7 - vectors[baseOffset+7]
+			delta8 := q8 - vectors[baseOffset+8]
+			delta9 := q9 - vectors[baseOffset+9]
+			delta10 := q10 - vectors[baseOffset+10]
+			delta11 := q11 - vectors[baseOffset+11]
+			delta12 := q12 - vectors[baseOffset+12]
+			delta13 := q13 - vectors[baseOffset+13]
+
+			distance := delta0*delta0 +
+				delta1*delta1 +
+				delta2*delta2 +
+				delta3*delta3 +
+				delta4*delta4 +
+				delta5*delta5 +
+				delta6*delta6 +
+				delta7*delta7 +
+				delta8*delta8 +
+				delta9*delta9 +
+				delta10*delta10 +
+				delta11*delta11 +
+				delta12*delta12 +
+				delta13*delta13
+			if distance < bestDistances[topK-1] {
+				insertTopK(distance, labels[vectorIndex], &bestDistances, &bestLabels)
+			}
+		}
 		}
 	}
 
@@ -302,48 +364,112 @@ func findTop5QuantizedBucketed(
 		)
 	}
 
+	trackSeen := len(store.SecondaryBucketIndex) > 0
+	var seen [candidateSeenLimit]uint32
+	seenCount := 0
+
 	for amountIndex := amountStart; amountIndex <= amountEnd; amountIndex++ {
 		for hourIndex := hourStart; hourIndex <= hourEnd; hourIndex++ {
 			for dayIndex := dayStart; dayIndex <= dayEnd; dayIndex++ {
 				for txIndex := txStart; txIndex <= txEnd; txIndex++ {
 					bucketID := dataset.BucketIDFromCoordinates(amountIndex, hourIndex, dayIndex, txIndex)
 					for _, vectorIndex := range store.BucketIndex[bucketID] {
-				baseOffset := int(vectorIndex) * dataset.VectorSize
-				delta0 := q0 - int32(vectors[baseOffset])
-				delta1 := q1 - int32(vectors[baseOffset+1])
-				delta2 := q2 - int32(vectors[baseOffset+2])
-				delta3 := q3 - int32(vectors[baseOffset+3])
-				delta4 := q4 - int32(vectors[baseOffset+4])
-				delta5 := q5 - int32(vectors[baseOffset+5])
-				delta6 := q6 - int32(vectors[baseOffset+6])
-				delta7 := q7 - int32(vectors[baseOffset+7])
-				delta8 := q8 - int32(vectors[baseOffset+8])
-				delta9 := q9 - int32(vectors[baseOffset+9])
-				delta10 := q10 - int32(vectors[baseOffset+10])
-				delta11 := q11 - int32(vectors[baseOffset+11])
-				delta12 := q12 - int32(vectors[baseOffset+12])
-				delta13 := q13 - int32(vectors[baseOffset+13])
+						if trackSeen && seenCount < candidateSeenLimit {
+							seen[seenCount] = vectorIndex
+							seenCount++
+						}
+						baseOffset := int(vectorIndex) * dataset.VectorSize
+						delta0 := q0 - int32(vectors[baseOffset])
+						delta1 := q1 - int32(vectors[baseOffset+1])
+						delta2 := q2 - int32(vectors[baseOffset+2])
+						delta3 := q3 - int32(vectors[baseOffset+3])
+						delta4 := q4 - int32(vectors[baseOffset+4])
+						delta5 := q5 - int32(vectors[baseOffset+5])
+						delta6 := q6 - int32(vectors[baseOffset+6])
+						delta7 := q7 - int32(vectors[baseOffset+7])
+						delta8 := q8 - int32(vectors[baseOffset+8])
+						delta9 := q9 - int32(vectors[baseOffset+9])
+						delta10 := q10 - int32(vectors[baseOffset+10])
+						delta11 := q11 - int32(vectors[baseOffset+11])
+						delta12 := q12 - int32(vectors[baseOffset+12])
+						delta13 := q13 - int32(vectors[baseOffset+13])
 
-				distance := squareUint64(delta0) +
-					squareUint64(delta1) +
-					squareUint64(delta2) +
-					squareUint64(delta3) +
-					squareUint64(delta4) +
-					squareUint64(delta5) +
-					squareUint64(delta6) +
-					squareUint64(delta7) +
-					squareUint64(delta8) +
-					squareUint64(delta9) +
-					squareUint64(delta10) +
-					squareUint64(delta11) +
-					squareUint64(delta12) +
-					squareUint64(delta13)
-				if distance < bestDistances[topK-1] {
-					insertTopKUint64(distance, labels[vectorIndex], &bestDistances, &bestLabels)
+						distance := squareUint64(delta0) +
+							squareUint64(delta1) +
+							squareUint64(delta2) +
+							squareUint64(delta3) +
+							squareUint64(delta4) +
+							squareUint64(delta5) +
+							squareUint64(delta6) +
+							squareUint64(delta7) +
+							squareUint64(delta8) +
+							squareUint64(delta9) +
+							squareUint64(delta10) +
+							squareUint64(delta11) +
+							squareUint64(delta12) +
+							squareUint64(delta13)
+						if distance < bestDistances[topK-1] {
+							insertTopKUint64(distance, labels[vectorIndex], &bestDistances, &bestLabels)
+						}
+					}
 				}
 			}
-				}
+		}
+	}
+
+	if trackSeen && candidateCount <= secondaryFallbackMaxPrimaryCandidates {
+		amountBucket2, hourBucket2, dayBucket2, riskBucket2 := dataset.SecondaryBucketCoordinatesFromQuery(
+			dataset.DequantizeComponent(uint16(q0)),
+			dataset.DequantizeComponent(uint16(q3)),
+			dataset.DequantizeComponent(uint16(q4)),
+			dataset.DequantizeComponent(uint16(q12)),
+		)
+		secondaryBucketID := dataset.SecondaryBucketIDFromCoordinates(amountBucket2, hourBucket2, dayBucket2, riskBucket2)
+		secondaryCandidates := store.SecondaryBucketIndex[secondaryBucketID]
+		if len(secondaryCandidates) <= secondaryFallbackMaxBucketSize {
+			for _, vectorIndex := range secondaryCandidates {
+			if containsCandidateID(seen[:seenCount], vectorIndex) {
+				continue
 			}
+			if seenCount < candidateSeenLimit {
+				seen[seenCount] = vectorIndex
+				seenCount++
+			}
+
+			baseOffset := int(vectorIndex) * dataset.VectorSize
+			delta0 := q0 - int32(vectors[baseOffset])
+			delta1 := q1 - int32(vectors[baseOffset+1])
+			delta2 := q2 - int32(vectors[baseOffset+2])
+			delta3 := q3 - int32(vectors[baseOffset+3])
+			delta4 := q4 - int32(vectors[baseOffset+4])
+			delta5 := q5 - int32(vectors[baseOffset+5])
+			delta6 := q6 - int32(vectors[baseOffset+6])
+			delta7 := q7 - int32(vectors[baseOffset+7])
+			delta8 := q8 - int32(vectors[baseOffset+8])
+			delta9 := q9 - int32(vectors[baseOffset+9])
+			delta10 := q10 - int32(vectors[baseOffset+10])
+			delta11 := q11 - int32(vectors[baseOffset+11])
+			delta12 := q12 - int32(vectors[baseOffset+12])
+			delta13 := q13 - int32(vectors[baseOffset+13])
+
+			distance := squareUint64(delta0) +
+				squareUint64(delta1) +
+				squareUint64(delta2) +
+				squareUint64(delta3) +
+				squareUint64(delta4) +
+				squareUint64(delta5) +
+				squareUint64(delta6) +
+				squareUint64(delta7) +
+				squareUint64(delta8) +
+				squareUint64(delta9) +
+				squareUint64(delta10) +
+				squareUint64(delta11) +
+				squareUint64(delta12) +
+				squareUint64(delta13)
+			if distance < bestDistances[topK-1] {
+				insertTopKUint64(distance, labels[vectorIndex], &bestDistances, &bestLabels)
+			}
+		}
 		}
 	}
 
@@ -387,6 +513,16 @@ func squareUint64(value int32) uint64 {
 	}
 
 	return uint64(unsigned * unsigned)
+}
+
+func containsCandidateID(candidateIDs []uint32, value uint32) bool {
+	for _, candidateID := range candidateIDs {
+		if candidateID == value {
+			return true
+		}
+	}
+
+	return false
 }
 
 func selectBucketWindow(
