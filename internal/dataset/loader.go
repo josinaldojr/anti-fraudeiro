@@ -55,11 +55,13 @@ func LoadVectorStore(path string) (*VectorStore, error) {
 		return nil, err
 	}
 
-	return &VectorStore{
+	store := &VectorStore{
 		Vectors: vectors,
 		Labels:  labels,
 		Count:   recordIndex,
-	}, nil
+	}
+	BuildBucketIndex(store)
+	return store, nil
 }
 
 func LoadBinaryVectorStore(path string) (*VectorStore, error) {
@@ -77,27 +79,56 @@ func LoadBinaryVectorStore(path string) (*VectorStore, error) {
 	}
 
 	count := int(header.Count)
-	vectors := make([]float32, count*VectorSize)
 	labels := make([]byte, count)
 
-	for recordIndex := 0; recordIndex < count; recordIndex++ {
-		label, err := reader.ReadByte()
-		if err != nil {
-			return nil, fmt.Errorf("read binary label %d: %w", recordIndex, err)
-		}
-		labels[recordIndex] = label
+	switch header.Version {
+	case BinaryFormatVersionV2:
+		vectors := make([]float32, count*VectorSize)
+		for recordIndex := 0; recordIndex < count; recordIndex++ {
+			label, err := reader.ReadByte()
+			if err != nil {
+				return nil, fmt.Errorf("read binary label %d: %w", recordIndex, err)
+			}
+			labels[recordIndex] = label
 
-		offset := recordIndex * VectorSize
-		if err := binary.Read(reader, binary.LittleEndian, vectors[offset:offset+VectorSize]); err != nil {
-			return nil, fmt.Errorf("read binary vector %d: %w", recordIndex, err)
+			offset := recordIndex * VectorSize
+			if err := binary.Read(reader, binary.LittleEndian, vectors[offset:offset+VectorSize]); err != nil {
+				return nil, fmt.Errorf("read binary vector %d: %w", recordIndex, err)
+			}
 		}
+
+		store := &VectorStore{
+			Vectors: vectors,
+			Labels:  labels,
+			Count:   count,
+		}
+		BuildBucketIndex(store)
+		return store, nil
+	case BinaryFormatVersion:
+		quantizedVectors := make([]uint16, count*VectorSize)
+		for recordIndex := 0; recordIndex < count; recordIndex++ {
+			label, err := reader.ReadByte()
+			if err != nil {
+				return nil, fmt.Errorf("read binary label %d: %w", recordIndex, err)
+			}
+			labels[recordIndex] = label
+
+			offset := recordIndex * VectorSize
+			if err := binary.Read(reader, binary.LittleEndian, quantizedVectors[offset:offset+VectorSize]); err != nil {
+				return nil, fmt.Errorf("read quantized vector %d: %w", recordIndex, err)
+			}
+		}
+
+		store := &VectorStore{
+			QuantizedVectors: quantizedVectors,
+			Labels:           labels,
+			Count:            count,
+		}
+		BuildBucketIndex(store)
+		return store, nil
+	default:
+		return nil, fmt.Errorf("unsupported binary references version %d", header.Version)
 	}
-
-	return &VectorStore{
-		Vectors: vectors,
-		Labels:  labels,
-		Count:   count,
-	}, nil
 }
 
 func SaveBinaryVectorStore(path string, store *VectorStore) error {
@@ -107,8 +138,11 @@ func SaveBinaryVectorStore(path string, store *VectorStore) error {
 	if len(store.Labels) != store.Count {
 		return fmt.Errorf("label count %d does not match store count %d", len(store.Labels), store.Count)
 	}
-	if len(store.Vectors) != store.Count*VectorSize {
+	if len(store.QuantizedVectors) == 0 && len(store.Vectors) != store.Count*VectorSize {
 		return fmt.Errorf("vector length %d does not match expected %d", len(store.Vectors), store.Count*VectorSize)
+	}
+	if len(store.QuantizedVectors) > 0 && len(store.QuantizedVectors) != store.Count*VectorSize {
+		return fmt.Errorf("quantized vector length %d does not match expected %d", len(store.QuantizedVectors), store.Count*VectorSize)
 	}
 
 	file, err := os.Create(path)
@@ -136,8 +170,19 @@ func SaveBinaryVectorStore(path string, store *VectorStore) error {
 		}
 
 		offset := recordIndex * VectorSize
-		if err := binary.Write(writer, binary.LittleEndian, store.Vectors[offset:offset+VectorSize]); err != nil {
-			return fmt.Errorf("write binary vector %d: %w", recordIndex, err)
+		var quantizedVector []uint16
+		if len(store.QuantizedVectors) == 0 {
+			var quantizedBuffer [VectorSize]uint16
+			for index, value := range store.Vectors[offset : offset+VectorSize] {
+				quantizedBuffer[index] = QuantizeComponent(value)
+			}
+			quantizedVector = quantizedBuffer[:]
+		} else {
+			quantizedVector = store.QuantizedVectors[offset : offset+VectorSize]
+		}
+
+		if err := binary.Write(writer, binary.LittleEndian, quantizedVector); err != nil {
+			return fmt.Errorf("write quantized vector %d: %w", recordIndex, err)
 		}
 	}
 
@@ -187,8 +232,13 @@ func ConvertJSONToBinary(inputPath string, outputPath string) (int, error) {
 			return 0, fmt.Errorf("write binary label: %w", err)
 		}
 
-		if err := binary.Write(writer, binary.LittleEndian, vector); err != nil {
-			return 0, fmt.Errorf("write binary vector: %w", err)
+		var quantizedVector [VectorSize]uint16
+		for index, value := range vector {
+			quantizedVector[index] = QuantizeComponent(value)
+		}
+
+		if err := binary.Write(writer, binary.LittleEndian, quantizedVector); err != nil {
+			return 0, fmt.Errorf("write quantized vector: %w", err)
 		}
 
 		recordIndex++
@@ -240,10 +290,6 @@ func readBinaryHeader(reader io.Reader) (binaryHeader, error) {
 
 	if header.Magic != binaryMagic {
 		return binaryHeader{}, fmt.Errorf("invalid binary references magic")
-	}
-
-	if header.Version != BinaryFormatVersion {
-		return binaryHeader{}, fmt.Errorf("unsupported binary references version %d", header.Version)
 	}
 
 	if header.VectorSize != VectorSize {

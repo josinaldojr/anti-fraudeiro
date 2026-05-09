@@ -2,6 +2,7 @@ package dataset
 
 import (
 	"compress/gzip"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -87,8 +88,14 @@ func TestBinaryVectorStoreRoundTrip(t *testing.T) {
 		t.Fatalf("actual.Labels = %v, want %v", actual.Labels, expected.Labels)
 	}
 
-	if !reflect.DeepEqual(actual.Vectors, expected.Vectors) {
-		t.Fatalf("actual.Vectors = %v, want %v", actual.Vectors, expected.Vectors)
+	if got := len(actual.QuantizedVectors); got != expected.Count*VectorSize {
+		t.Fatalf("len(actual.QuantizedVectors) = %d, want %d", got, expected.Count*VectorSize)
+	}
+
+	for index, value := range expected.Vectors {
+		if got := DequantizeComponent(actual.QuantizedVectors[index]); math.Abs(float64(got-value)) > 0.0001 {
+			t.Fatalf("dequantized actual[%d] = %f, want %f", index, got, value)
+		}
 	}
 }
 
@@ -123,5 +130,9 @@ func TestConvertJSONToBinary(t *testing.T) {
 
 	if !reflect.DeepEqual(store.Labels, []byte{LabelFraud, LabelLegit}) {
 		t.Fatalf("store.Labels = %v, want %v", store.Labels, []byte{LabelFraud, LabelLegit})
+	}
+
+	if got := len(store.QuantizedVectors); got != 2*VectorSize {
+		t.Fatalf("len(store.QuantizedVectors) = %d, want %d", got, 2*VectorSize)
 	}
 }

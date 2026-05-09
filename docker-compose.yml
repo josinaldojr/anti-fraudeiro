@@ -57,5 +57,5 @@ services:
 
 networks:
   anti-fraudeiro:
+    name: anti-fraudeiro
     driver: bridge
-

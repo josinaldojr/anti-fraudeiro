@@ -29,6 +29,7 @@ func TestFindTop5(t *testing.T) {
 		},
 		Count: 6,
 	}
+	dataset.BuildBucketIndex(store)
 
 	if fraudCount := FindTop5(query, store); fraudCount != 3 {
 		t.Fatalf("FindTop5 fraud count = %d, want 3", fraudCount)
@@ -40,10 +41,11 @@ func BenchmarkFindTop5(b *testing.B) {
 
 	query := sampleRequestVector()
 	store := &dataset.VectorStore{
-		Vectors: benchmarkVectors(1024),
-		Labels:  benchmarkLabels(1024),
-		Count:   1024,
+		QuantizedVectors: benchmarkQuantizedVectors(1024),
+		Labels:           benchmarkLabels(1024),
+		Count:            1024,
 	}
+	dataset.BuildBucketIndex(store)
 
 	for b.Loop() {
 		_ = FindTop5(query, store)

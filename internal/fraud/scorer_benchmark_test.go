@@ -10,10 +10,11 @@ func BenchmarkScorerScore(b *testing.B) {
 	b.ReportAllocs()
 
 	scorer := NewScorer(newTestVectorizer(), &dataset.VectorStore{
-		Vectors: benchmarkVectors(1024),
-		Labels:  benchmarkLabels(1024),
-		Count:   1024,
+		QuantizedVectors: benchmarkQuantizedVectors(1024),
+		Labels:           benchmarkLabels(1024),
+		Count:            1024,
 	})
+	dataset.BuildBucketIndex(scorer.store)
 	request := sampleRequest()
 
 	for b.Loop() {
@@ -27,10 +28,11 @@ func BenchmarkScorerScoreLargeKnownMerchantSet(b *testing.B) {
 	b.ReportAllocs()
 
 	scorer := NewScorer(newTestVectorizer(), &dataset.VectorStore{
-		Vectors: benchmarkVectors(1024),
-		Labels:  benchmarkLabels(1024),
-		Count:   1024,
+		QuantizedVectors: benchmarkQuantizedVectors(1024),
+		Labels:           benchmarkLabels(1024),
+		Count:            1024,
 	})
+	dataset.BuildBucketIndex(scorer.store)
 	request := sampleRequest()
 	request.Customer.KnownMerchants = benchmarkKnownMerchants(128)
 	request.Customer.KnownMerchants[96] = request.Merchant.ID
@@ -68,6 +70,17 @@ func benchmarkVectors(count int) []float32 {
 	}
 
 	return values
+}
+
+func benchmarkQuantizedVectors(count int) []uint16 {
+	values := benchmarkVectors(count)
+	quantized := make([]uint16, len(values))
+
+	for index, value := range values {
+		quantized[index] = dataset.QuantizeComponent(value)
+	}
+
+	return quantized
 }
 
 func benchmarkLabels(count int) []byte {
