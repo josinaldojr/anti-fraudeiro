@@ -35,6 +35,21 @@ func TestFindTop5(t *testing.T) {
 	}
 }
 
+func BenchmarkFindTop5(b *testing.B) {
+	b.ReportAllocs()
+
+	query := sampleRequestVector()
+	store := &dataset.VectorStore{
+		Vectors: benchmarkVectors(1024),
+		Labels:  benchmarkLabels(1024),
+		Count:   1024,
+	}
+
+	for b.Loop() {
+		_ = FindTop5(query, store)
+	}
+}
+
 func vectorWithFirstDimension(value float32) [14]float32 {
 	var vector [14]float32
 	vector[0] = value
@@ -49,4 +64,25 @@ func flattenVectors(vectors ...[14]float32) []float32 {
 	}
 
 	return flattened
+}
+
+func sampleRequestVector() [14]float32 {
+	vector := [14]float32{
+		0.50,
+		0.25,
+		0.10,
+		0.50,
+		0.20,
+		-1,
+		-1,
+		0.03,
+		0.15,
+		0,
+		1,
+		0,
+		0.20,
+		0.04,
+	}
+
+	return vector
 }

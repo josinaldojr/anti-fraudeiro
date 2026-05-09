@@ -23,6 +23,26 @@ func BenchmarkScorerScore(b *testing.B) {
 	}
 }
 
+func BenchmarkScorerScoreLargeKnownMerchantSet(b *testing.B) {
+	b.ReportAllocs()
+
+	scorer := NewScorer(newTestVectorizer(), &dataset.VectorStore{
+		Vectors: benchmarkVectors(1024),
+		Labels:  benchmarkLabels(1024),
+		Count:   1024,
+	})
+	request := sampleRequest()
+	request.Customer.KnownMerchants = benchmarkKnownMerchants(128)
+	request.Customer.KnownMerchants[96] = request.Merchant.ID
+	request.Customer.Finalize()
+
+	for b.Loop() {
+		if _, err := scorer.Score(request); err != nil {
+			b.Fatalf("Score returned error: %v", err)
+		}
+	}
+}
+
 func benchmarkVectors(count int) []float32 {
 	values := make([]float32, 0, count*14)
 
@@ -60,4 +80,12 @@ func benchmarkLabels(count int) []byte {
 	}
 
 	return labels
+}
+
+func benchmarkKnownMerchants(count int) []string {
+	merchants := make([]string, count)
+	for i := 0; i < count; i++ {
+		merchants[i] = "MERC-BENCH-" + string(rune('A'+(i%26))) + string(rune('0'+(i%10)))
+	}
+	return merchants
 }

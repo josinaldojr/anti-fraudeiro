@@ -18,7 +18,7 @@ Go backend for the [Rinha de Backend 2026](https://github.com/zanfranceschi/rinh
 The current implementation prioritizes correctness, simplicity, and a clean baseline for future optimization work. The search path uses:
 
 - `net/http`
-- `encoding/json`
+- `goccy/go-json`
 - brute-force KNN
 - squared Euclidean distance
 - fixed top-5 tracking without sorting the entire dataset
@@ -27,6 +27,7 @@ The current implementation prioritizes correctness, simplicity, and a clean base
 
 - [Go](https://go.dev/)
 - `net/http`
+- [goccy/go-json](https://github.com/goccy/go-json)
 - Docker
 - Docker Compose
 - Nginx
@@ -95,6 +96,33 @@ go run ./cmd/api
 ```bash
 go test ./...
 ```
+
+### Run Rinha k6 Tests
+
+Smoke test:
+
+```bash
+sh ./scripts/run-rinha-smoke.sh
+```
+
+Full challenge test:
+
+```bash
+sh ./scripts/run-rinha-test.sh
+```
+
+PowerShell equivalents:
+
+```powershell
+./scripts/run-rinha-smoke.ps1
+./scripts/run-rinha-test.ps1
+```
+
+Optional environment variables:
+
+- `BASE_URL` default: `http://localhost:9999`
+- `RESULTS_PATH` default: `artifacts/rinha/results.json`
+- `K6_DOCKER_NETWORK` optional: Docker network name used when the `k6` wrapper falls back to the containerized runner
 
 ### Generate Compact Binary Dataset
 
@@ -183,6 +211,8 @@ Useful commands:
 - `make docker-down`
 - `make curl-ready`
 - `make curl-fraud-score`
+- `make rinha-smoke`
+- `make rinha-test`
 
 ## Architecture Notes
 

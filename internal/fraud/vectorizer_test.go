@@ -71,6 +71,7 @@ func TestVectorizeUnknownMerchant(t *testing.T) {
 	vectorizer := newTestVectorizer()
 	request := sampleRequest()
 	request.Customer.KnownMerchants = []string{"MERC-001"}
+	request.Customer.Finalize()
 
 	vector, err := vectorizer.Vectorize(request)
 	if err != nil {
@@ -82,6 +83,7 @@ func TestVectorizeUnknownMerchant(t *testing.T) {
 	}
 
 	request.Customer.KnownMerchants = []string{"MERC-009", "MERC-123"}
+	request.Customer.Finalize()
 	vector, err = vectorizer.Vectorize(request)
 	if err != nil {
 		t.Fatalf("Vectorize returned error: %v", err)
@@ -89,6 +91,23 @@ func TestVectorizeUnknownMerchant(t *testing.T) {
 
 	if vector[11] != 0 {
 		t.Fatalf("vector[11] = %v, want 0", vector[11])
+	}
+}
+
+func TestCustomerUsesLookupSetForLargerKnownMerchantLists(t *testing.T) {
+	t.Parallel()
+
+	customer := Customer{
+		KnownMerchants: []string{"M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9"},
+	}
+	customer.Finalize()
+
+	if !customer.HasKnownMerchant("M8") {
+		t.Fatalf("expected customer to know merchant M8")
+	}
+
+	if customer.HasKnownMerchant("M999") {
+		t.Fatalf("expected customer to not know merchant M999")
 	}
 }
 
@@ -140,7 +159,7 @@ func newTestVectorizer() *Vectorizer {
 }
 
 func sampleRequest() FraudScoreRequest {
-	return FraudScoreRequest{
+	request := FraudScoreRequest{
 		ID: "tx-1329056812",
 		Transaction: Transaction{
 			Amount:       41.12,
@@ -164,4 +183,7 @@ func sampleRequest() FraudScoreRequest {
 		},
 		LastTransaction: nil,
 	}
+
+	request.Customer.Finalize()
+	return request
 }

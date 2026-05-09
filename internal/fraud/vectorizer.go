@@ -62,7 +62,7 @@ func (v *Vectorizer) Vectorize(request FraudScoreRequest) ([14]float32, error) {
 	vector[8] = clamp(float64(request.Customer.TxCount24h) * v.maxTxCount24hInv)
 	vector[9] = boolToFloat32(request.Terminal.IsOnline)
 	vector[10] = boolToFloat32(request.Terminal.CardPresent)
-	vector[11] = boolToFloat32(isUnknownMerchant(request.Merchant.ID, request.Customer.KnownMerchants))
+	vector[11] = boolToFloat32(!request.Customer.HasKnownMerchant(request.Merchant.ID))
 	vector[12] = v.lookupMCCRisk(request.Merchant.MCC)
 	vector[13] = clamp(request.Merchant.AvgAmount * v.maxMerchantAvgAmountInv)
 
@@ -114,16 +114,6 @@ func boolToFloat32(value bool) float32 {
 	}
 
 	return 0
-}
-
-func isUnknownMerchant(merchantID string, knownMerchants []string) bool {
-	for _, knownMerchant := range knownMerchants {
-		if knownMerchant == merchantID {
-			return false
-		}
-	}
-
-	return true
 }
 
 func (v *Vectorizer) lookupMCCRisk(mcc string) float32 {

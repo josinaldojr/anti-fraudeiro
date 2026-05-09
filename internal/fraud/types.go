@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strconv"
 	"time"
+
+	json "github.com/goccy/go-json"
 )
 
 const topK = 5
@@ -25,9 +27,10 @@ type Transaction struct {
 }
 
 type Customer struct {
-	AvgAmount      float64  `json:"avg_amount"`
-	TxCount24h     int      `json:"tx_count_24h"`
-	KnownMerchants []string `json:"known_merchants"`
+	AvgAmount        float64  `json:"avg_amount"`
+	TxCount24h       int      `json:"tx_count_24h"`
+	KnownMerchants   []string `json:"known_merchants"`
+	knownMerchantSet map[string]struct{}
 }
 
 type Merchant struct {
@@ -86,6 +89,58 @@ func ParseTimestamp(value string) (Timestamp, error) {
 	}
 
 	return Timestamp{unixNano: parsed.UTC().UnixNano()}, nil
+}
+
+func (c *Customer) UnmarshalJSON(data []byte) error {
+	type customerAlias struct {
+		AvgAmount      float64  `json:"avg_amount"`
+		TxCount24h     int      `json:"tx_count_24h"`
+		KnownMerchants []string `json:"known_merchants"`
+	}
+
+	var decoded customerAlias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+
+	c.AvgAmount = decoded.AvgAmount
+	c.TxCount24h = decoded.TxCount24h
+	c.KnownMerchants = decoded.KnownMerchants
+	c.knownMerchantSet = buildKnownMerchantSet(decoded.KnownMerchants)
+
+	return nil
+}
+
+func (c *Customer) Finalize() {
+	c.knownMerchantSet = buildKnownMerchantSet(c.KnownMerchants)
+}
+
+func (c Customer) HasKnownMerchant(merchantID string) bool {
+	if len(c.knownMerchantSet) > 0 {
+		_, found := c.knownMerchantSet[merchantID]
+		return found
+	}
+
+	for _, knownMerchant := range c.KnownMerchants {
+		if knownMerchant == merchantID {
+			return true
+		}
+	}
+
+	return false
+}
+
+func buildKnownMerchantSet(knownMerchants []string) map[string]struct{} {
+	if len(knownMerchants) < 8 {
+		return nil
+	}
+
+	knownMerchantSet := make(map[string]struct{}, len(knownMerchants))
+	for _, knownMerchant := range knownMerchants {
+		knownMerchantSet[knownMerchant] = struct{}{}
+	}
+
+	return knownMerchantSet
 }
 
 func parseJSONString(data []byte) (string, error) {
