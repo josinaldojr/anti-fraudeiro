@@ -13,9 +13,25 @@ func main() {
 	outputPath := flag.String("output", filepath.Join("resources", dataset.BinaryReferenceFile), "path to the compact binary output")
 	flag.Parse()
 
-	count, err := dataset.ConvertJSONToBinary(*inputPath, *outputPath)
-	if err != nil {
-		log.Fatal(err)
+	var count int
+	switch filepath.Ext(*inputPath) {
+	case ".bin":
+		store, err := dataset.LoadBinaryVectorStore(*inputPath)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer store.Close()
+
+		if err := dataset.SaveBinaryVectorStore(*outputPath, store); err != nil {
+			log.Fatal(err)
+		}
+		count = store.Count
+	default:
+		var err error
+		count, err = dataset.ConvertJSONToBinary(*inputPath, *outputPath)
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	log.Printf("wrote %d reference vectors to %s", count, *outputPath)

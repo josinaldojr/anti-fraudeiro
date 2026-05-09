@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"unsafe"
 )
 
 func LoadVectorStore(path string) (*VectorStore, error) {
@@ -105,6 +106,8 @@ func LoadBinaryVectorStore(path string) (*VectorStore, error) {
 		BuildBucketIndex(store)
 		return store, nil
 	case BinaryFormatVersion:
+		return loadMappedQuantizedVectorStore(path, header)
+	case BinaryFormatVersionV3:
 		quantizedVectors := make([]uint16, count*VectorSize)
 		for recordIndex := 0; recordIndex < count; recordIndex++ {
 			label, err := reader.ReadByte()
@@ -164,11 +167,17 @@ func SaveBinaryVectorStore(path string, store *VectorStore) error {
 		return fmt.Errorf("write binary header: %w", err)
 	}
 
-	for recordIndex := 0; recordIndex < store.Count; recordIndex++ {
-		if err := writer.WriteByte(store.Labels[recordIndex]); err != nil {
-			return fmt.Errorf("write binary label %d: %w", recordIndex, err)
-		}
+	if _, err := writer.Write(store.Labels); err != nil {
+		return fmt.Errorf("write binary labels: %w", err)
+	}
 
+	if store.Count%2 != 0 {
+		if err := writer.WriteByte(0); err != nil {
+			return fmt.Errorf("write binary padding: %w", err)
+		}
+	}
+
+	for recordIndex := 0; recordIndex < store.Count; recordIndex++ {
 		offset := recordIndex * VectorSize
 		var quantizedVector []uint16
 		if len(store.QuantizedVectors) == 0 {
@@ -204,17 +213,17 @@ func ConvertJSONToBinary(inputPath string, outputPath string) (int, error) {
 		return 0, err
 	}
 
-	file, err := os.Create(outputPath)
+	vectorTempFile, err := os.CreateTemp(filepath.Dir(outputPath), "references-vectors-*.bin")
 	if err != nil {
-		return 0, fmt.Errorf("create binary references file: %w", err)
+		return 0, fmt.Errorf("create temporary vectors file: %w", err)
 	}
-	defer file.Close()
+	defer func() {
+		_ = vectorTempFile.Close()
+		_ = os.Remove(vectorTempFile.Name())
+	}()
 
-	if err := writePlaceholderHeader(file); err != nil {
-		return 0, err
-	}
-
-	writer := bufio.NewWriter(file)
+	vectorWriter := bufio.NewWriter(vectorTempFile)
+	labels := make([]byte, 0, 1<<20)
 	recordIndex := 0
 
 	for decoder.More() {
@@ -228,16 +237,14 @@ func ConvertJSONToBinary(inputPath string, outputPath string) (int, error) {
 			return 0, fmt.Errorf("record %d %w", recordIndex, err)
 		}
 
-		if err := writer.WriteByte(label); err != nil {
-			return 0, fmt.Errorf("write binary label: %w", err)
-		}
+		labels = append(labels, label)
 
 		var quantizedVector [VectorSize]uint16
 		for index, value := range vector {
 			quantizedVector[index] = QuantizeComponent(value)
 		}
 
-		if err := binary.Write(writer, binary.LittleEndian, quantizedVector); err != nil {
+		if err := binary.Write(vectorWriter, binary.LittleEndian, quantizedVector); err != nil {
 			return 0, fmt.Errorf("write quantized vector: %w", err)
 		}
 
@@ -248,12 +255,46 @@ func ConvertJSONToBinary(inputPath string, outputPath string) (int, error) {
 		return 0, err
 	}
 
-	if err := writer.Flush(); err != nil {
-		return 0, fmt.Errorf("flush binary references file: %w", err)
+	if err := vectorWriter.Flush(); err != nil {
+		return 0, fmt.Errorf("flush temporary vectors file: %w", err)
 	}
 
-	if err := writeFinalHeader(file, recordIndex); err != nil {
-		return 0, err
+	if _, err := vectorTempFile.Seek(0, io.SeekStart); err != nil {
+		return 0, fmt.Errorf("seek temporary vectors file: %w", err)
+	}
+
+	file, err := os.Create(outputPath)
+	if err != nil {
+		return 0, fmt.Errorf("create binary references file: %w", err)
+	}
+	defer file.Close()
+
+	writer := bufio.NewWriter(file)
+	if err := binary.Write(writer, binary.LittleEndian, binaryHeader{
+		Magic:      binaryMagic,
+		Version:    BinaryFormatVersion,
+		VectorSize: VectorSize,
+		Count:      uint64(recordIndex),
+	}); err != nil {
+		return 0, fmt.Errorf("write binary header: %w", err)
+	}
+
+	if _, err := writer.Write(labels); err != nil {
+		return 0, fmt.Errorf("write binary labels: %w", err)
+	}
+
+	if len(labels)%2 != 0 {
+		if err := writer.WriteByte(0); err != nil {
+			return 0, fmt.Errorf("write binary padding: %w", err)
+		}
+	}
+
+	if _, err := io.Copy(writer, vectorTempFile); err != nil {
+		return 0, fmt.Errorf("write binary vectors: %w", err)
+	}
+
+	if err := writer.Flush(); err != nil {
+		return 0, fmt.Errorf("flush binary references file: %w", err)
 	}
 
 	return recordIndex, nil
@@ -380,7 +421,7 @@ func binaryRecordFromReference(record ReferenceRecord) (byte, [VectorSize]float3
 func writePlaceholderHeader(file *os.File) error {
 	header := binaryHeader{
 		Magic:      binaryMagic,
-		Version:    BinaryFormatVersion,
+		Version:    BinaryFormatVersionV3,
 		VectorSize: VectorSize,
 		Count:      0,
 	}
@@ -395,7 +436,7 @@ func writePlaceholderHeader(file *os.File) error {
 func writeFinalHeader(file *os.File, count int) error {
 	header := binaryHeader{
 		Magic:      binaryMagic,
-		Version:    BinaryFormatVersion,
+		Version:    BinaryFormatVersionV3,
 		VectorSize: VectorSize,
 		Count:      uint64(count),
 	}
@@ -409,4 +450,46 @@ func writeFinalHeader(file *os.File, count int) error {
 	}
 
 	return nil
+}
+
+func loadMappedQuantizedVectorStore(path string, header binaryHeader) (*VectorStore, error) {
+	mappedData, err := mmapFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	count := int(header.Count)
+	labelsOffset := binary.Size(binaryHeader{})
+	vectorsOffset := labelsOffset + count
+	if vectorsOffset%2 != 0 {
+		vectorsOffset++
+	}
+
+	vectorBytesLength := count * VectorSize * 2
+	expectedSize := vectorsOffset + vectorBytesLength
+	if len(mappedData) < expectedSize {
+		_ = unmapFile(mappedData)
+		return nil, fmt.Errorf("binary references file is truncated: got %d bytes, need %d", len(mappedData), expectedSize)
+	}
+
+	labels := mappedData[labelsOffset : labelsOffset+count]
+	vectorBytes := mappedData[vectorsOffset:expectedSize]
+	quantizedVectors := bytesAsUint16(vectorBytes)
+
+	store := &VectorStore{
+		QuantizedVectors: quantizedVectors,
+		Labels:           labels,
+		Count:            count,
+		mappedData:       mappedData,
+	}
+	BuildBucketIndex(store)
+	return store, nil
+}
+
+func bytesAsUint16(data []byte) []uint16 {
+	if len(data) == 0 {
+		return nil
+	}
+
+	return unsafe.Slice((*uint16)(unsafe.Pointer(&data[0])), len(data)/2)
 }

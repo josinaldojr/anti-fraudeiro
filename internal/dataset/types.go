@@ -5,7 +5,8 @@ const (
 	LabelLegit                = byte(0)
 	LabelFraud                = byte(1)
 	BinaryFormatVersionV2     = uint32(2)
-	BinaryFormatVersion       = uint32(3)
+	BinaryFormatVersionV3     = uint32(3)
+	BinaryFormatVersion       = uint32(4)
 	BinaryReferenceFile       = "references.bin"
 	CompressedReferenceFile   = "references.json.gz"
 	ExampleReferenceFile      = "example-references.json"
@@ -34,6 +35,21 @@ type VectorStore struct {
 	Count                int
 	BucketIndex          [][]uint32
 	SecondaryBucketIndex [][]uint32
+	mappedData           []byte
+}
+
+func (store *VectorStore) Close() error {
+	if store == nil || len(store.mappedData) == 0 {
+		return nil
+	}
+
+	mappedData := store.mappedData
+	store.mappedData = nil
+	store.Vectors = nil
+	store.QuantizedVectors = nil
+	store.Labels = nil
+
+	return unmapFile(mappedData)
 }
 
 func QuantizeComponent(value float32) uint16 {
