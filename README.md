@@ -84,8 +84,18 @@ Environment variables:
 - `GC_PERCENT`
 - `MEMORY_LIMIT_MIB`
 - `MAX_CONCURRENT_FRAUD_REQUESTS`
+- `BUCKET_STRATEGY`
+- `BUCKET_TARGET_CANDIDATES`
+- `BUCKET_MAX_SEARCH_RADIUS`
+- `ENABLE_SECONDARY_BUCKET_INDEX`
 
 Default HTTP port is `9999`.
+
+Bucket strategy options:
+
+- `window`: baseline bucket-window scan used by default
+- `ordered`: scans whole buckets in coarse-distance order until it reaches the target
+- `shortlist`: scans at most `BUCKET_TARGET_CANDIDATES`, ordered by bucket-center distance
 
 ## Usage
 
@@ -226,6 +236,8 @@ Useful commands:
 - The dataset loader supports compact binary, plain JSON, and `gzip`-compressed JSON.
 - The current reference store is kept in contiguous slices for lower overhead on the hot path.
 - Runtime tuning is configurable through `GOMAXPROCS`, `GC_PERCENT`, `MEMORY_LIMIT_MIB`, and `MAX_CONCURRENT_FRAUD_REQUESTS`.
+- The optional `shortlist` search path builds a fixed-size candidate list ordered by bucket-center distance and never falls back to a global 3M-vector scan at runtime.
+- Trade-off: the shortlist path caps work more aggressively and reduces the candidate ceiling, but in the real Rinha workload it can lose recall and worsen score or `p99` depending on the target. Lower `BUCKET_TARGET_CANDIDATES` is cheaper, while higher targets recover accuracy at the cost of more tail latency.
 
 ## Challenge References
 

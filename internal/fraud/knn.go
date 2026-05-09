@@ -3,6 +3,7 @@ package fraud
 import (
 	"math"
 	"sort"
+	"sync"
 
 	"github.com/josinaldojr/anti-fraudeiro/internal/dataset"
 )
@@ -12,11 +13,28 @@ const (
 	secondaryFallbackMaxPrimaryCandidates = 96
 	secondaryFallbackMaxBucketSize        = 256
 	maxWindowBuckets                      = 2401
+	maxShortlistCandidates                = 256
 )
 
 type searchConfig struct {
 	bucketTargetCandidates int
 	bucketMaxSearchRadius  int
+}
+
+type searchStats struct {
+	processedCandidates int
+}
+
+type knnScratch struct {
+	bucketCandidates [maxWindowBuckets]bucketCandidate
+	shortlist        [maxShortlistCandidates]uint32
+	seen             [candidateSeenLimit]uint32
+}
+
+var knnScratchPool = sync.Pool{
+	New: func() any {
+		return &knnScratch{}
+	},
 }
 
 var defaultSearchConfig = searchConfig{
@@ -31,6 +49,7 @@ func SetDefaultSearchConfig(bucketTargetCandidates int, bucketMaxSearchRadius in
 	if bucketMaxSearchRadius >= 0 && bucketMaxSearchRadius <= 3 {
 		defaultSearchConfig.bucketMaxSearchRadius = bucketMaxSearchRadius
 	}
+	defaultSearchConfig = normalizeSearchConfig(defaultSearchConfig)
 }
 
 func FindTop5(query [14]float32, store *dataset.VectorStore) (fraudCount int) {
@@ -42,9 +61,16 @@ func FindTop5WithStrategy(query [14]float32, store *dataset.VectorStore, strateg
 }
 
 func findTop5WithConfig(query [14]float32, store *dataset.VectorStore, strategy BucketStrategy, cfg searchConfig) (fraudCount int) {
+	fraudCount, _ = findTop5WithStats(query, store, strategy, cfg)
+	return fraudCount
+}
+
+func findTop5WithStats(query [14]float32, store *dataset.VectorStore, strategy BucketStrategy, cfg searchConfig) (fraudCount int, stats searchStats) {
 	if store == nil || store.Count == 0 {
-		return 0
+		return 0, searchStats{}
 	}
+
+	cfg = normalizeSearchConfig(cfg)
 
 	if len(store.QuantizedVectors) > 0 {
 		return findTop5Quantized(query, store, strategy, cfg)
@@ -59,13 +85,32 @@ func FindTop5Exact(query [14]float32, store *dataset.VectorStore) (fraudCount in
 	}
 
 	if len(store.QuantizedVectors) > 0 {
-		return findTop5Quantized(query, store, "", defaultSearchConfig)
+		fraudCount, _ = findTop5Quantized(query, store, "", normalizeSearchConfig(defaultSearchConfig))
+		return fraudCount
 	}
 
-	return findTop5Float32(query, store, "", defaultSearchConfig)
+	fraudCount, _ = findTop5Float32(query, store, "", normalizeSearchConfig(defaultSearchConfig))
+	return fraudCount
 }
 
-func findTop5Float32(query [14]float32, store *dataset.VectorStore, strategy BucketStrategy, cfg searchConfig) (fraudCount int) {
+func normalizeSearchConfig(cfg searchConfig) searchConfig {
+	if cfg.bucketTargetCandidates < topK {
+		cfg.bucketTargetCandidates = topK
+	}
+	if cfg.bucketTargetCandidates > maxShortlistCandidates {
+		cfg.bucketTargetCandidates = maxShortlistCandidates
+	}
+	if cfg.bucketMaxSearchRadius < 0 {
+		cfg.bucketMaxSearchRadius = 0
+	}
+	if cfg.bucketMaxSearchRadius > 3 {
+		cfg.bucketMaxSearchRadius = 3
+	}
+
+	return cfg
+}
+
+func findTop5Float32(query [14]float32, store *dataset.VectorStore, strategy BucketStrategy, cfg searchConfig) (fraudCount int, stats searchStats) {
 	q0 := query[0]
 	q1 := query[1]
 	q2 := query[2]
@@ -129,6 +174,7 @@ func findTop5Float32(query [14]float32, store *dataset.VectorStore, strategy Buc
 			insertTopK(distance, labels[vectorIndex], &bestDistances, &bestLabels)
 		}
 	}
+	stats.processedCandidates = store.Count
 
 	for _, label := range bestLabels {
 		if label == dataset.LabelFraud {
@@ -136,10 +182,10 @@ func findTop5Float32(query [14]float32, store *dataset.VectorStore, strategy Buc
 		}
 	}
 
-	return fraudCount
+	return fraudCount, stats
 }
 
-func findTop5Float32Bucketed(query [14]float32, store *dataset.VectorStore, strategy BucketStrategy, cfg searchConfig, bestDistances [topK]float32, bestLabels [topK]byte) (fraudCount int) {
+func findTop5Float32Bucketed(query [14]float32, store *dataset.VectorStore, strategy BucketStrategy, cfg searchConfig, bestDistances [topK]float32, bestLabels [topK]byte) (fraudCount int, stats searchStats) {
 	q0 := query[0]
 	q1 := query[1]
 	q2 := query[2]
@@ -160,17 +206,15 @@ func findTop5Float32Bucketed(query [14]float32, store *dataset.VectorStore, stra
 	amountBucket, hourBucket, dayBucket, tx24hBucket := dataset.BucketCoordinatesFromQuery(q0, q3, q4, q8)
 	amountStart, amountEnd, hourStart, hourEnd, dayStart, dayEnd, txStart, txEnd, candidateCount :=
 		selectBucketWindow(store.BucketIndex, store.BucketPrefixSums, amountBucket, hourBucket, dayBucket, tx24hBucket, cfg)
-	if candidateCount < topK {
-		return findTop5Float32(query, &dataset.VectorStore{Vectors: vectors, Labels: labels, Count: store.Count}, "", cfg)
-	}
 
 	trackSeen := len(store.SecondaryBucketIndex) > 0
-	var seen [candidateSeenLimit]uint32
+	scratch := knnScratchPool.Get().(*knnScratch)
+	defer knnScratchPool.Put(scratch)
 	seenCount := 0
-	if strategy == BucketStrategyOrdered {
-		var bucketCandidates [maxWindowBuckets]bucketCandidate
+	switch strategy {
+	case BucketStrategyOrdered:
 		bucketCount, _ := collectOrderedBucketCandidates(
-			bucketCandidates[:],
+			scratch.bucketCandidates[:],
 			store.BucketIndex,
 			q0,
 			q3,
@@ -187,151 +231,93 @@ func findTop5Float32Bucketed(query [14]float32, store *dataset.VectorStore, stra
 		)
 		processedCandidates := 0
 		for bucketIndex := 0; bucketIndex < bucketCount; bucketIndex++ {
-			bucketID := bucketCandidates[bucketIndex].id
+			bucketID := scratch.bucketCandidates[bucketIndex].id
 			bucketVectors := store.BucketIndex[bucketID]
-			processedCandidates += len(bucketVectors)
-			for _, vectorIndex := range bucketVectors {
-				if trackSeen && seenCount < candidateSeenLimit {
-					seen[seenCount] = vectorIndex
-					seenCount++
-				}
-				baseOffset := int(vectorIndex) * dataset.VectorSize
-				delta0 := q0 - vectors[baseOffset]
-				delta1 := q1 - vectors[baseOffset+1]
-				delta2 := q2 - vectors[baseOffset+2]
-				delta3 := q3 - vectors[baseOffset+3]
-				delta4 := q4 - vectors[baseOffset+4]
-				delta5 := q5 - vectors[baseOffset+5]
-				delta6 := q6 - vectors[baseOffset+6]
-				delta7 := q7 - vectors[baseOffset+7]
-				delta8 := q8 - vectors[baseOffset+8]
-				delta9 := q9 - vectors[baseOffset+9]
-				delta10 := q10 - vectors[baseOffset+10]
-				delta11 := q11 - vectors[baseOffset+11]
-				delta12 := q12 - vectors[baseOffset+12]
-				delta13 := q13 - vectors[baseOffset+13]
-
-				distance := delta0*delta0 +
-					delta1*delta1 +
-					delta2*delta2 +
-					delta3*delta3 +
-					delta4*delta4 +
-					delta5*delta5 +
-					delta6*delta6 +
-					delta7*delta7 +
-					delta8*delta8 +
-					delta9*delta9 +
-					delta10*delta10 +
-					delta11*delta11 +
-					delta12*delta12 +
-					delta13*delta13
-				if distance < bestDistances[topK-1] {
-					insertTopK(distance, labels[vectorIndex], &bestDistances, &bestLabels)
-				}
-			}
+			processedCandidates += scanFloatCandidates(
+				bucketVectors,
+				vectors,
+				labels,
+				q0, q1, q2, q3, q4, q5, q6, q7, q8, q9, q10, q11, q12, q13,
+				&bestDistances,
+				&bestLabels,
+				trackSeen,
+				&scratch.seen,
+				&seenCount,
+			)
 			if processedCandidates >= cfg.bucketTargetCandidates {
 				break
 			}
 		}
-	} else {
+		stats.processedCandidates = processedCandidates
+	case BucketStrategyShortlist:
+		shortlistCount := collectShortlist(
+			scratch.shortlist[:cfg.bucketTargetCandidates],
+			scratch.bucketCandidates[:],
+			store.BucketIndex,
+			q0,
+			q3,
+			q4,
+			q8,
+			amountStart,
+			amountEnd,
+			hourStart,
+			hourEnd,
+			dayStart,
+			dayEnd,
+			txStart,
+			txEnd,
+		)
+		stats.processedCandidates = scanFloatCandidates(
+			scratch.shortlist[:shortlistCount],
+			vectors,
+			labels,
+			q0, q1, q2, q3, q4, q5, q6, q7, q8, q9, q10, q11, q12, q13,
+			&bestDistances,
+			&bestLabels,
+			trackSeen,
+			&scratch.seen,
+			&seenCount,
+		)
+	default:
 		for amountIndex := amountStart; amountIndex <= amountEnd; amountIndex++ {
 			for hourIndex := hourStart; hourIndex <= hourEnd; hourIndex++ {
 				for dayIndex := dayStart; dayIndex <= dayEnd; dayIndex++ {
 					for txIndex := txStart; txIndex <= txEnd; txIndex++ {
 						bucketID := dataset.BucketIDFromCoordinates(amountIndex, hourIndex, dayIndex, txIndex)
-						for _, vectorIndex := range store.BucketIndex[bucketID] {
-							if trackSeen && seenCount < candidateSeenLimit {
-								seen[seenCount] = vectorIndex
-								seenCount++
-							}
-							baseOffset := int(vectorIndex) * dataset.VectorSize
-							delta0 := q0 - vectors[baseOffset]
-							delta1 := q1 - vectors[baseOffset+1]
-							delta2 := q2 - vectors[baseOffset+2]
-							delta3 := q3 - vectors[baseOffset+3]
-							delta4 := q4 - vectors[baseOffset+4]
-							delta5 := q5 - vectors[baseOffset+5]
-							delta6 := q6 - vectors[baseOffset+6]
-							delta7 := q7 - vectors[baseOffset+7]
-							delta8 := q8 - vectors[baseOffset+8]
-							delta9 := q9 - vectors[baseOffset+9]
-							delta10 := q10 - vectors[baseOffset+10]
-							delta11 := q11 - vectors[baseOffset+11]
-							delta12 := q12 - vectors[baseOffset+12]
-							delta13 := q13 - vectors[baseOffset+13]
-
-							distance := delta0*delta0 +
-								delta1*delta1 +
-								delta2*delta2 +
-								delta3*delta3 +
-								delta4*delta4 +
-								delta5*delta5 +
-								delta6*delta6 +
-								delta7*delta7 +
-								delta8*delta8 +
-								delta9*delta9 +
-								delta10*delta10 +
-								delta11*delta11 +
-								delta12*delta12 +
-								delta13*delta13
-							if distance < bestDistances[topK-1] {
-								insertTopK(distance, labels[vectorIndex], &bestDistances, &bestLabels)
-							}
-						}
+						stats.processedCandidates += scanFloatCandidates(
+							store.BucketIndex[bucketID],
+							vectors,
+							labels,
+							q0, q1, q2, q3, q4, q5, q6, q7, q8, q9, q10, q11, q12, q13,
+							&bestDistances,
+							&bestLabels,
+							trackSeen,
+							&scratch.seen,
+							&seenCount,
+						)
 					}
 				}
 			}
 		}
 	}
 
-	if trackSeen && candidateCount <= secondaryFallbackMaxPrimaryCandidates {
+	if trackSeen && stats.processedCandidates < topK && candidateCount <= secondaryFallbackMaxPrimaryCandidates {
 		amountBucket2, hourBucket2, dayBucket2, riskBucket2 := dataset.SecondaryBucketCoordinatesFromQuery(q0, q3, q4, q12)
 		secondaryBucketID := dataset.SecondaryBucketIDFromCoordinates(amountBucket2, hourBucket2, dayBucket2, riskBucket2)
 		secondaryCandidates := store.SecondaryBucketIndex[secondaryBucketID]
 		if len(secondaryCandidates) <= secondaryFallbackMaxBucketSize {
-			for _, vectorIndex := range secondaryCandidates {
-				if containsCandidateID(seen[:seenCount], vectorIndex) {
-					continue
-				}
-				if seenCount < candidateSeenLimit {
-					seen[seenCount] = vectorIndex
-					seenCount++
-				}
-
-				baseOffset := int(vectorIndex) * dataset.VectorSize
-				delta0 := q0 - vectors[baseOffset]
-				delta1 := q1 - vectors[baseOffset+1]
-				delta2 := q2 - vectors[baseOffset+2]
-				delta3 := q3 - vectors[baseOffset+3]
-				delta4 := q4 - vectors[baseOffset+4]
-				delta5 := q5 - vectors[baseOffset+5]
-				delta6 := q6 - vectors[baseOffset+6]
-				delta7 := q7 - vectors[baseOffset+7]
-				delta8 := q8 - vectors[baseOffset+8]
-				delta9 := q9 - vectors[baseOffset+9]
-				delta10 := q10 - vectors[baseOffset+10]
-				delta11 := q11 - vectors[baseOffset+11]
-				delta12 := q12 - vectors[baseOffset+12]
-				delta13 := q13 - vectors[baseOffset+13]
-
-				distance := delta0*delta0 +
-					delta1*delta1 +
-					delta2*delta2 +
-					delta3*delta3 +
-					delta4*delta4 +
-					delta5*delta5 +
-					delta6*delta6 +
-					delta7*delta7 +
-					delta8*delta8 +
-					delta9*delta9 +
-					delta10*delta10 +
-					delta11*delta11 +
-					delta12*delta12 +
-					delta13*delta13
-				if distance < bestDistances[topK-1] {
-					insertTopK(distance, labels[vectorIndex], &bestDistances, &bestLabels)
-				}
-			}
+			stats.processedCandidates += scanFloatSecondaryCandidates(
+				secondaryCandidates,
+				cfg.bucketTargetCandidates-stats.processedCandidates,
+				vectors,
+				labels,
+				q0, q1, q2, q3, q4, q5, q6, q7, q8, q9, q10, q11, q12, q13,
+				&bestDistances,
+				&bestLabels,
+				scratch.seen[:seenCount],
+				&scratch.seen,
+				&seenCount,
+			)
 		}
 	}
 
@@ -341,10 +327,10 @@ func findTop5Float32Bucketed(query [14]float32, store *dataset.VectorStore, stra
 		}
 	}
 
-	return fraudCount
+	return fraudCount, stats
 }
 
-func findTop5Quantized(query [14]float32, store *dataset.VectorStore, strategy BucketStrategy, cfg searchConfig) (fraudCount int) {
+func findTop5Quantized(query [14]float32, store *dataset.VectorStore, strategy BucketStrategy, cfg searchConfig) (fraudCount int, stats searchStats) {
 	q0 := int32(dataset.QuantizeComponent(query[0]))
 	q1 := int32(dataset.QuantizeComponent(query[1]))
 	q2 := int32(dataset.QuantizeComponent(query[2]))
@@ -408,6 +394,7 @@ func findTop5Quantized(query [14]float32, store *dataset.VectorStore, strategy B
 			insertTopKUint64(distance, labels[vectorIndex], &bestDistances, &bestLabels)
 		}
 	}
+	stats.processedCandidates = store.Count
 
 	for _, label := range bestLabels {
 		if label == dataset.LabelFraud {
@@ -415,7 +402,7 @@ func findTop5Quantized(query [14]float32, store *dataset.VectorStore, strategy B
 		}
 	}
 
-	return fraudCount
+	return fraudCount, stats
 }
 
 func findTop5QuantizedBucketed(
@@ -438,7 +425,7 @@ func findTop5QuantizedBucketed(
 	q13 int32,
 	bestDistances [topK]uint64,
 	bestLabels [topK]byte,
-) (fraudCount int) {
+) (fraudCount int, stats searchStats) {
 	vectors := store.QuantizedVectors
 	labels := store.Labels
 	amountBucket, hourBucket, dayBucket, tx24hBucket := dataset.BucketCoordinatesFromQuery(
@@ -450,42 +437,20 @@ func findTop5QuantizedBucketed(
 
 	amountStart, amountEnd, hourStart, hourEnd, dayStart, dayEnd, txStart, txEnd, candidateCount :=
 		selectBucketWindow(store.BucketIndex, store.BucketPrefixSums, amountBucket, hourBucket, dayBucket, tx24hBucket, cfg)
-	if candidateCount < topK {
-		return findTop5Quantized(
-			[14]float32{
-				dataset.DequantizeComponent(uint16(q0)),
-				dataset.DequantizeComponent(uint16(q1)),
-				dataset.DequantizeComponent(uint16(q2)),
-				dataset.DequantizeComponent(uint16(q3)),
-				dataset.DequantizeComponent(uint16(q4)),
-				dataset.DequantizeComponent(uint16(q5)),
-				dataset.DequantizeComponent(uint16(q6)),
-				dataset.DequantizeComponent(uint16(q7)),
-				dataset.DequantizeComponent(uint16(q8)),
-				dataset.DequantizeComponent(uint16(q9)),
-				dataset.DequantizeComponent(uint16(q10)),
-				dataset.DequantizeComponent(uint16(q11)),
-				dataset.DequantizeComponent(uint16(q12)),
-				dataset.DequantizeComponent(uint16(q13)),
-			},
-			&dataset.VectorStore{QuantizedVectors: vectors, Labels: labels, Count: store.Count},
-			"",
-			cfg,
-		)
-	}
 
 	trackSeen := len(store.SecondaryBucketIndex) > 0
-	var seen [candidateSeenLimit]uint32
+	scratch := knnScratchPool.Get().(*knnScratch)
+	defer knnScratchPool.Put(scratch)
 	seenCount := 0
 
-	if strategy == BucketStrategyOrdered {
+	switch strategy {
+	case BucketStrategyOrdered:
 		queryAmount := dataset.DequantizeComponent(uint16(q0))
 		queryHour := dataset.DequantizeComponent(uint16(q3))
 		queryDay := dataset.DequantizeComponent(uint16(q4))
 		queryTx24h := dataset.DequantizeComponent(uint16(q8))
-		var bucketCandidates [maxWindowBuckets]bucketCandidate
 		bucketCount, _ := collectOrderedBucketCandidates(
-			bucketCandidates[:],
+			scratch.bucketCandidates[:],
 			store.BucketIndex,
 			queryAmount,
 			queryHour,
@@ -502,104 +467,77 @@ func findTop5QuantizedBucketed(
 		)
 		processedCandidates := 0
 		for bucketIndex := 0; bucketIndex < bucketCount; bucketIndex++ {
-			bucketID := bucketCandidates[bucketIndex].id
+			bucketID := scratch.bucketCandidates[bucketIndex].id
 			bucketVectors := store.BucketIndex[bucketID]
-			processedCandidates += len(bucketVectors)
-			for _, vectorIndex := range bucketVectors {
-				if trackSeen && seenCount < candidateSeenLimit {
-					seen[seenCount] = vectorIndex
-					seenCount++
-				}
-				baseOffset := int(vectorIndex) * dataset.VectorSize
-				delta0 := q0 - int32(vectors[baseOffset])
-				delta1 := q1 - int32(vectors[baseOffset+1])
-				delta2 := q2 - int32(vectors[baseOffset+2])
-				delta3 := q3 - int32(vectors[baseOffset+3])
-				delta4 := q4 - int32(vectors[baseOffset+4])
-				delta5 := q5 - int32(vectors[baseOffset+5])
-				delta6 := q6 - int32(vectors[baseOffset+6])
-				delta7 := q7 - int32(vectors[baseOffset+7])
-				delta8 := q8 - int32(vectors[baseOffset+8])
-				delta9 := q9 - int32(vectors[baseOffset+9])
-				delta10 := q10 - int32(vectors[baseOffset+10])
-				delta11 := q11 - int32(vectors[baseOffset+11])
-				delta12 := q12 - int32(vectors[baseOffset+12])
-				delta13 := q13 - int32(vectors[baseOffset+13])
-
-				distance := squareUint64(delta0) +
-					squareUint64(delta1) +
-					squareUint64(delta2) +
-					squareUint64(delta3) +
-					squareUint64(delta4) +
-					squareUint64(delta5) +
-					squareUint64(delta6) +
-					squareUint64(delta7) +
-					squareUint64(delta8) +
-					squareUint64(delta9) +
-					squareUint64(delta10) +
-					squareUint64(delta11) +
-					squareUint64(delta12) +
-					squareUint64(delta13)
-				if distance < bestDistances[topK-1] {
-					insertTopKUint64(distance, labels[vectorIndex], &bestDistances, &bestLabels)
-				}
-			}
+			processedCandidates += scanQuantizedCandidates(
+				bucketVectors,
+				vectors,
+				labels,
+				q0, q1, q2, q3, q4, q5, q6, q7, q8, q9, q10, q11, q12, q13,
+				&bestDistances,
+				&bestLabels,
+				trackSeen,
+				&scratch.seen,
+				&seenCount,
+			)
 			if processedCandidates >= cfg.bucketTargetCandidates {
 				break
 			}
 		}
-	} else {
+		stats.processedCandidates = processedCandidates
+	case BucketStrategyShortlist:
+		shortlistCount := collectShortlist(
+			scratch.shortlist[:cfg.bucketTargetCandidates],
+			scratch.bucketCandidates[:],
+			store.BucketIndex,
+			dataset.DequantizeComponent(uint16(q0)),
+			dataset.DequantizeComponent(uint16(q3)),
+			dataset.DequantizeComponent(uint16(q4)),
+			dataset.DequantizeComponent(uint16(q8)),
+			amountStart,
+			amountEnd,
+			hourStart,
+			hourEnd,
+			dayStart,
+			dayEnd,
+			txStart,
+			txEnd,
+		)
+		stats.processedCandidates = scanQuantizedCandidates(
+			scratch.shortlist[:shortlistCount],
+			vectors,
+			labels,
+			q0, q1, q2, q3, q4, q5, q6, q7, q8, q9, q10, q11, q12, q13,
+			&bestDistances,
+			&bestLabels,
+			trackSeen,
+			&scratch.seen,
+			&seenCount,
+		)
+	default:
 		for amountIndex := amountStart; amountIndex <= amountEnd; amountIndex++ {
 			for hourIndex := hourStart; hourIndex <= hourEnd; hourIndex++ {
 				for dayIndex := dayStart; dayIndex <= dayEnd; dayIndex++ {
 					for txIndex := txStart; txIndex <= txEnd; txIndex++ {
 						bucketID := dataset.BucketIDFromCoordinates(amountIndex, hourIndex, dayIndex, txIndex)
-						for _, vectorIndex := range store.BucketIndex[bucketID] {
-							if trackSeen && seenCount < candidateSeenLimit {
-								seen[seenCount] = vectorIndex
-								seenCount++
-							}
-							baseOffset := int(vectorIndex) * dataset.VectorSize
-							delta0 := q0 - int32(vectors[baseOffset])
-							delta1 := q1 - int32(vectors[baseOffset+1])
-							delta2 := q2 - int32(vectors[baseOffset+2])
-							delta3 := q3 - int32(vectors[baseOffset+3])
-							delta4 := q4 - int32(vectors[baseOffset+4])
-							delta5 := q5 - int32(vectors[baseOffset+5])
-							delta6 := q6 - int32(vectors[baseOffset+6])
-							delta7 := q7 - int32(vectors[baseOffset+7])
-							delta8 := q8 - int32(vectors[baseOffset+8])
-							delta9 := q9 - int32(vectors[baseOffset+9])
-							delta10 := q10 - int32(vectors[baseOffset+10])
-							delta11 := q11 - int32(vectors[baseOffset+11])
-							delta12 := q12 - int32(vectors[baseOffset+12])
-							delta13 := q13 - int32(vectors[baseOffset+13])
-
-							distance := squareUint64(delta0) +
-								squareUint64(delta1) +
-								squareUint64(delta2) +
-								squareUint64(delta3) +
-								squareUint64(delta4) +
-								squareUint64(delta5) +
-								squareUint64(delta6) +
-								squareUint64(delta7) +
-								squareUint64(delta8) +
-								squareUint64(delta9) +
-								squareUint64(delta10) +
-								squareUint64(delta11) +
-								squareUint64(delta12) +
-								squareUint64(delta13)
-							if distance < bestDistances[topK-1] {
-								insertTopKUint64(distance, labels[vectorIndex], &bestDistances, &bestLabels)
-							}
-						}
+						stats.processedCandidates += scanQuantizedCandidates(
+							store.BucketIndex[bucketID],
+							vectors,
+							labels,
+							q0, q1, q2, q3, q4, q5, q6, q7, q8, q9, q10, q11, q12, q13,
+							&bestDistances,
+							&bestLabels,
+							trackSeen,
+							&scratch.seen,
+							&seenCount,
+						)
 					}
 				}
 			}
 		}
 	}
 
-	if trackSeen && candidateCount <= secondaryFallbackMaxPrimaryCandidates {
+	if trackSeen && stats.processedCandidates < topK && candidateCount <= secondaryFallbackMaxPrimaryCandidates {
 		amountBucket2, hourBucket2, dayBucket2, riskBucket2 := dataset.SecondaryBucketCoordinatesFromQuery(
 			dataset.DequantizeComponent(uint16(q0)),
 			dataset.DequantizeComponent(uint16(q3)),
@@ -609,49 +547,18 @@ func findTop5QuantizedBucketed(
 		secondaryBucketID := dataset.SecondaryBucketIDFromCoordinates(amountBucket2, hourBucket2, dayBucket2, riskBucket2)
 		secondaryCandidates := store.SecondaryBucketIndex[secondaryBucketID]
 		if len(secondaryCandidates) <= secondaryFallbackMaxBucketSize {
-			for _, vectorIndex := range secondaryCandidates {
-				if containsCandidateID(seen[:seenCount], vectorIndex) {
-					continue
-				}
-				if seenCount < candidateSeenLimit {
-					seen[seenCount] = vectorIndex
-					seenCount++
-				}
-
-				baseOffset := int(vectorIndex) * dataset.VectorSize
-				delta0 := q0 - int32(vectors[baseOffset])
-				delta1 := q1 - int32(vectors[baseOffset+1])
-				delta2 := q2 - int32(vectors[baseOffset+2])
-				delta3 := q3 - int32(vectors[baseOffset+3])
-				delta4 := q4 - int32(vectors[baseOffset+4])
-				delta5 := q5 - int32(vectors[baseOffset+5])
-				delta6 := q6 - int32(vectors[baseOffset+6])
-				delta7 := q7 - int32(vectors[baseOffset+7])
-				delta8 := q8 - int32(vectors[baseOffset+8])
-				delta9 := q9 - int32(vectors[baseOffset+9])
-				delta10 := q10 - int32(vectors[baseOffset+10])
-				delta11 := q11 - int32(vectors[baseOffset+11])
-				delta12 := q12 - int32(vectors[baseOffset+12])
-				delta13 := q13 - int32(vectors[baseOffset+13])
-
-				distance := squareUint64(delta0) +
-					squareUint64(delta1) +
-					squareUint64(delta2) +
-					squareUint64(delta3) +
-					squareUint64(delta4) +
-					squareUint64(delta5) +
-					squareUint64(delta6) +
-					squareUint64(delta7) +
-					squareUint64(delta8) +
-					squareUint64(delta9) +
-					squareUint64(delta10) +
-					squareUint64(delta11) +
-					squareUint64(delta12) +
-					squareUint64(delta13)
-				if distance < bestDistances[topK-1] {
-					insertTopKUint64(distance, labels[vectorIndex], &bestDistances, &bestLabels)
-				}
-			}
+			stats.processedCandidates += scanQuantizedSecondaryCandidates(
+				secondaryCandidates,
+				cfg.bucketTargetCandidates-stats.processedCandidates,
+				vectors,
+				labels,
+				q0, q1, q2, q3, q4, q5, q6, q7, q8, q9, q10, q11, q12, q13,
+				&bestDistances,
+				&bestLabels,
+				scratch.seen[:seenCount],
+				&scratch.seen,
+				&seenCount,
+			)
 		}
 	}
 
@@ -661,7 +568,7 @@ func findTop5QuantizedBucketed(
 		}
 	}
 
-	return fraudCount
+	return fraudCount, stats
 }
 
 func insertTopK(distance float32, label byte, bestDistances *[topK]float32, bestLabels *[topK]byte) {
@@ -708,8 +615,369 @@ func containsCandidateID(candidateIDs []uint32, value uint32) bool {
 }
 
 type bucketCandidate struct {
-	id         int
-	lowerBound float32
+	id       int
+	distance float32
+}
+
+type bucketCandidateSlice []bucketCandidate
+
+func (c bucketCandidateSlice) Len() int {
+	return len(c)
+}
+
+func (c bucketCandidateSlice) Less(left int, right int) bool {
+	if c[left].distance == c[right].distance {
+		return c[left].id < c[right].id
+	}
+
+	return c[left].distance < c[right].distance
+}
+
+func (c bucketCandidateSlice) Swap(left int, right int) {
+	c[left], c[right] = c[right], c[left]
+}
+
+func collectShortlist(
+	shortlist []uint32,
+	bucketCandidates []bucketCandidate,
+	buckets [][]uint32,
+	queryAmount float32,
+	queryHour float32,
+	queryDay float32,
+	queryTx24h float32,
+	amountStart int,
+	amountEnd int,
+	hourStart int,
+	hourEnd int,
+	dayStart int,
+	dayEnd int,
+	txStart int,
+	txEnd int,
+) int {
+	bucketCount, _ := collectCenteredBucketCandidates(
+		bucketCandidates,
+		buckets,
+		queryAmount,
+		queryHour,
+		queryDay,
+		queryTx24h,
+		amountStart,
+		amountEnd,
+		hourStart,
+		hourEnd,
+		dayStart,
+		dayEnd,
+		txStart,
+		txEnd,
+	)
+
+	shortlistCount := 0
+	for candidateIndex := 0; candidateIndex < bucketCount && shortlistCount < len(shortlist); candidateIndex++ {
+		bucketVectors := buckets[bucketCandidates[candidateIndex].id]
+		remaining := len(shortlist) - shortlistCount
+		if len(bucketVectors) > remaining {
+			copy(shortlist[shortlistCount:], bucketVectors[:remaining])
+			shortlistCount += remaining
+			break
+		}
+
+		copy(shortlist[shortlistCount:], bucketVectors)
+		shortlistCount += len(bucketVectors)
+	}
+
+	return shortlistCount
+}
+
+func scanFloatCandidates(
+	candidateIDs []uint32,
+	vectors []float32,
+	labels []byte,
+	q0 float32,
+	q1 float32,
+	q2 float32,
+	q3 float32,
+	q4 float32,
+	q5 float32,
+	q6 float32,
+	q7 float32,
+	q8 float32,
+	q9 float32,
+	q10 float32,
+	q11 float32,
+	q12 float32,
+	q13 float32,
+	bestDistances *[topK]float32,
+	bestLabels *[topK]byte,
+	trackSeen bool,
+	seen *[candidateSeenLimit]uint32,
+	seenCount *int,
+) int {
+	for _, vectorIndex := range candidateIDs {
+		if trackSeen && *seenCount < candidateSeenLimit {
+			seen[*seenCount] = vectorIndex
+			*seenCount = *seenCount + 1
+		}
+
+		baseOffset := int(vectorIndex) * dataset.VectorSize
+		delta0 := q0 - vectors[baseOffset]
+		delta1 := q1 - vectors[baseOffset+1]
+		delta2 := q2 - vectors[baseOffset+2]
+		delta3 := q3 - vectors[baseOffset+3]
+		delta4 := q4 - vectors[baseOffset+4]
+		delta5 := q5 - vectors[baseOffset+5]
+		delta6 := q6 - vectors[baseOffset+6]
+		delta7 := q7 - vectors[baseOffset+7]
+		delta8 := q8 - vectors[baseOffset+8]
+		delta9 := q9 - vectors[baseOffset+9]
+		delta10 := q10 - vectors[baseOffset+10]
+		delta11 := q11 - vectors[baseOffset+11]
+		delta12 := q12 - vectors[baseOffset+12]
+		delta13 := q13 - vectors[baseOffset+13]
+
+		distance := delta0*delta0 +
+			delta1*delta1 +
+			delta2*delta2 +
+			delta3*delta3 +
+			delta4*delta4 +
+			delta5*delta5 +
+			delta6*delta6 +
+			delta7*delta7 +
+			delta8*delta8 +
+			delta9*delta9 +
+			delta10*delta10 +
+			delta11*delta11 +
+			delta12*delta12 +
+			delta13*delta13
+		if distance < bestDistances[topK-1] {
+			insertTopK(distance, labels[vectorIndex], bestDistances, bestLabels)
+		}
+	}
+
+	return len(candidateIDs)
+}
+
+func scanFloatSecondaryCandidates(
+	candidateIDs []uint32,
+	limit int,
+	vectors []float32,
+	labels []byte,
+	q0 float32,
+	q1 float32,
+	q2 float32,
+	q3 float32,
+	q4 float32,
+	q5 float32,
+	q6 float32,
+	q7 float32,
+	q8 float32,
+	q9 float32,
+	q10 float32,
+	q11 float32,
+	q12 float32,
+	q13 float32,
+	bestDistances *[topK]float32,
+	bestLabels *[topK]byte,
+	existing []uint32,
+	seen *[candidateSeenLimit]uint32,
+	seenCount *int,
+) int {
+	if limit <= 0 {
+		return 0
+	}
+
+	appended := 0
+	for _, vectorIndex := range candidateIDs {
+		if appended >= limit || containsCandidateID(existing, vectorIndex) {
+			continue
+		}
+		if *seenCount < candidateSeenLimit {
+			seen[*seenCount] = vectorIndex
+			*seenCount = *seenCount + 1
+		}
+
+		baseOffset := int(vectorIndex) * dataset.VectorSize
+		delta0 := q0 - vectors[baseOffset]
+		delta1 := q1 - vectors[baseOffset+1]
+		delta2 := q2 - vectors[baseOffset+2]
+		delta3 := q3 - vectors[baseOffset+3]
+		delta4 := q4 - vectors[baseOffset+4]
+		delta5 := q5 - vectors[baseOffset+5]
+		delta6 := q6 - vectors[baseOffset+6]
+		delta7 := q7 - vectors[baseOffset+7]
+		delta8 := q8 - vectors[baseOffset+8]
+		delta9 := q9 - vectors[baseOffset+9]
+		delta10 := q10 - vectors[baseOffset+10]
+		delta11 := q11 - vectors[baseOffset+11]
+		delta12 := q12 - vectors[baseOffset+12]
+		delta13 := q13 - vectors[baseOffset+13]
+
+		distance := delta0*delta0 +
+			delta1*delta1 +
+			delta2*delta2 +
+			delta3*delta3 +
+			delta4*delta4 +
+			delta5*delta5 +
+			delta6*delta6 +
+			delta7*delta7 +
+			delta8*delta8 +
+			delta9*delta9 +
+			delta10*delta10 +
+			delta11*delta11 +
+			delta12*delta12 +
+			delta13*delta13
+		if distance < bestDistances[topK-1] {
+			insertTopK(distance, labels[vectorIndex], bestDistances, bestLabels)
+		}
+		appended++
+	}
+
+	return appended
+}
+
+func scanQuantizedCandidates(
+	candidateIDs []uint32,
+	vectors []uint16,
+	labels []byte,
+	q0 int32,
+	q1 int32,
+	q2 int32,
+	q3 int32,
+	q4 int32,
+	q5 int32,
+	q6 int32,
+	q7 int32,
+	q8 int32,
+	q9 int32,
+	q10 int32,
+	q11 int32,
+	q12 int32,
+	q13 int32,
+	bestDistances *[topK]uint64,
+	bestLabels *[topK]byte,
+	trackSeen bool,
+	seen *[candidateSeenLimit]uint32,
+	seenCount *int,
+) int {
+	for _, vectorIndex := range candidateIDs {
+		if trackSeen && *seenCount < candidateSeenLimit {
+			seen[*seenCount] = vectorIndex
+			*seenCount = *seenCount + 1
+		}
+
+		baseOffset := int(vectorIndex) * dataset.VectorSize
+		delta0 := q0 - int32(vectors[baseOffset])
+		delta1 := q1 - int32(vectors[baseOffset+1])
+		delta2 := q2 - int32(vectors[baseOffset+2])
+		delta3 := q3 - int32(vectors[baseOffset+3])
+		delta4 := q4 - int32(vectors[baseOffset+4])
+		delta5 := q5 - int32(vectors[baseOffset+5])
+		delta6 := q6 - int32(vectors[baseOffset+6])
+		delta7 := q7 - int32(vectors[baseOffset+7])
+		delta8 := q8 - int32(vectors[baseOffset+8])
+		delta9 := q9 - int32(vectors[baseOffset+9])
+		delta10 := q10 - int32(vectors[baseOffset+10])
+		delta11 := q11 - int32(vectors[baseOffset+11])
+		delta12 := q12 - int32(vectors[baseOffset+12])
+		delta13 := q13 - int32(vectors[baseOffset+13])
+
+		distance := squareUint64(delta0) +
+			squareUint64(delta1) +
+			squareUint64(delta2) +
+			squareUint64(delta3) +
+			squareUint64(delta4) +
+			squareUint64(delta5) +
+			squareUint64(delta6) +
+			squareUint64(delta7) +
+			squareUint64(delta8) +
+			squareUint64(delta9) +
+			squareUint64(delta10) +
+			squareUint64(delta11) +
+			squareUint64(delta12) +
+			squareUint64(delta13)
+		if distance < bestDistances[topK-1] {
+			insertTopKUint64(distance, labels[vectorIndex], bestDistances, bestLabels)
+		}
+	}
+
+	return len(candidateIDs)
+}
+
+func scanQuantizedSecondaryCandidates(
+	candidateIDs []uint32,
+	limit int,
+	vectors []uint16,
+	labels []byte,
+	q0 int32,
+	q1 int32,
+	q2 int32,
+	q3 int32,
+	q4 int32,
+	q5 int32,
+	q6 int32,
+	q7 int32,
+	q8 int32,
+	q9 int32,
+	q10 int32,
+	q11 int32,
+	q12 int32,
+	q13 int32,
+	bestDistances *[topK]uint64,
+	bestLabels *[topK]byte,
+	existing []uint32,
+	seen *[candidateSeenLimit]uint32,
+	seenCount *int,
+) int {
+	if limit <= 0 {
+		return 0
+	}
+
+	appended := 0
+	for _, vectorIndex := range candidateIDs {
+		if appended >= limit || containsCandidateID(existing, vectorIndex) {
+			continue
+		}
+		if *seenCount < candidateSeenLimit {
+			seen[*seenCount] = vectorIndex
+			*seenCount = *seenCount + 1
+		}
+
+		baseOffset := int(vectorIndex) * dataset.VectorSize
+		delta0 := q0 - int32(vectors[baseOffset])
+		delta1 := q1 - int32(vectors[baseOffset+1])
+		delta2 := q2 - int32(vectors[baseOffset+2])
+		delta3 := q3 - int32(vectors[baseOffset+3])
+		delta4 := q4 - int32(vectors[baseOffset+4])
+		delta5 := q5 - int32(vectors[baseOffset+5])
+		delta6 := q6 - int32(vectors[baseOffset+6])
+		delta7 := q7 - int32(vectors[baseOffset+7])
+		delta8 := q8 - int32(vectors[baseOffset+8])
+		delta9 := q9 - int32(vectors[baseOffset+9])
+		delta10 := q10 - int32(vectors[baseOffset+10])
+		delta11 := q11 - int32(vectors[baseOffset+11])
+		delta12 := q12 - int32(vectors[baseOffset+12])
+		delta13 := q13 - int32(vectors[baseOffset+13])
+
+		distance := squareUint64(delta0) +
+			squareUint64(delta1) +
+			squareUint64(delta2) +
+			squareUint64(delta3) +
+			squareUint64(delta4) +
+			squareUint64(delta5) +
+			squareUint64(delta6) +
+			squareUint64(delta7) +
+			squareUint64(delta8) +
+			squareUint64(delta9) +
+			squareUint64(delta10) +
+			squareUint64(delta11) +
+			squareUint64(delta12) +
+			squareUint64(delta13)
+		if distance < bestDistances[topK-1] {
+			insertTopKUint64(distance, labels[vectorIndex], bestDistances, bestLabels)
+		}
+		appended++
+	}
+
+	return appended
 }
 
 func collectOrderedBucketCandidates(
@@ -743,7 +1011,7 @@ func collectOrderedBucketCandidates(
 
 					candidates[count] = bucketCandidate{
 						id: bucketID,
-						lowerBound: coarseLowerBound(
+						distance: coarseLowerBound(
 							queryAmount,
 							queryHour,
 							queryDay,
@@ -761,13 +1029,61 @@ func collectOrderedBucketCandidates(
 		}
 	}
 
-	sort.Slice(candidates[:count], func(left int, right int) bool {
-		if candidates[left].lowerBound == candidates[right].lowerBound {
-			return candidates[left].id < candidates[right].id
-		}
+	sort.Sort(bucketCandidateSlice(candidates[:count]))
 
-		return candidates[left].lowerBound < candidates[right].lowerBound
-	})
+	return count, candidateCount
+}
+
+func collectCenteredBucketCandidates(
+	candidates []bucketCandidate,
+	bucketIndex [][]uint32,
+	queryAmount float32,
+	queryHour float32,
+	queryDay float32,
+	queryTx24h float32,
+	amountStart int,
+	amountEnd int,
+	hourStart int,
+	hourEnd int,
+	dayStart int,
+	dayEnd int,
+	txStart int,
+	txEnd int,
+) (int, int) {
+	count := 0
+	candidateCount := 0
+
+	for amountIndex := amountStart; amountIndex <= amountEnd; amountIndex++ {
+		for hourIndex := hourStart; hourIndex <= hourEnd; hourIndex++ {
+			for dayIndex := dayStart; dayIndex <= dayEnd; dayIndex++ {
+				for txIndex := txStart; txIndex <= txEnd; txIndex++ {
+					bucketID := dataset.BucketIDFromCoordinates(amountIndex, hourIndex, dayIndex, txIndex)
+					bucketSize := len(bucketIndex[bucketID])
+					if bucketSize == 0 {
+						continue
+					}
+
+					candidates[count] = bucketCandidate{
+						id: bucketID,
+						distance: bucketCenterDistance(
+							queryAmount,
+							queryHour,
+							queryDay,
+							queryTx24h,
+							amountIndex,
+							hourIndex,
+							dayIndex,
+							txIndex,
+						),
+					}
+					count++
+					candidateCount += bucketSize
+				}
+			}
+		}
+	}
+
+	sort.Sort(bucketCandidateSlice(candidates[:count]))
 
 	return count, candidateCount
 }
@@ -791,6 +1107,36 @@ func coarseLowerBound(
 		hourDistance*hourDistance +
 		dayDistance*dayDistance +
 		txDistance*txDistance
+}
+
+func bucketCenterDistance(
+	queryAmount float32,
+	queryHour float32,
+	queryDay float32,
+	queryTx24h float32,
+	amountBucket int,
+	hourBucket int,
+	dayBucket int,
+	txBucket int,
+) float32 {
+	amountCenter := bucketCenter(amountBucket, dataset.AmountBucketCount)
+	hourCenter := bucketCenter(hourBucket, dataset.HourBucketCount)
+	dayCenter := bucketCenter(dayBucket, dataset.DayBucketCount)
+	txCenter := bucketCenter(txBucket, dataset.Tx24hBucketCount)
+
+	amountDistance := queryAmount - amountCenter
+	hourDistance := queryHour - hourCenter
+	dayDistance := queryDay - dayCenter
+	txDistance := queryTx24h - txCenter
+
+	return amountDistance*amountDistance +
+		hourDistance*hourDistance +
+		dayDistance*dayDistance +
+		txDistance*txDistance
+}
+
+func bucketCenter(bucket int, bucketCount int) float32 {
+	return (float32(bucket) + 0.5) / float32(bucketCount)
 }
 
 func intervalDistance(query float32, bucket int, bucketCount int) float32 {

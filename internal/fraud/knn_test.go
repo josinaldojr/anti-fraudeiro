@@ -14,11 +14,11 @@ func TestFindTop5(t *testing.T) {
 	store := &dataset.VectorStore{
 		Vectors: flattenVectors(
 			vectorWithFirstDimension(0.00),
-			vectorWithFirstDimension(0.10),
-			vectorWithFirstDimension(0.20),
-			vectorWithFirstDimension(0.30),
-			vectorWithFirstDimension(0.40),
-			vectorWithFirstDimension(10.00),
+			vectorWithFirstDimension(0.005),
+			vectorWithFirstDimension(0.010),
+			vectorWithFirstDimension(0.015),
+			vectorWithFirstDimension(0.020),
+			vectorWithFirstDimension(0.90),
 		),
 		Labels: []byte{
 			dataset.LabelLegit,
@@ -93,6 +93,52 @@ func BenchmarkFindTop5BucketConfigs(b *testing.B) {
 	}
 }
 
+func BenchmarkFindTop5StrategyMatrix(b *testing.B) {
+	b.ReportAllocs()
+
+	query := sampleRequestVector()
+	store := &dataset.VectorStore{
+		QuantizedVectors: benchmarkQuantizedVectors(1024),
+		Labels:           benchmarkLabels(1024),
+		Count:            1024,
+	}
+	dataset.BuildBucketIndex(store)
+
+	strategies := []BucketStrategy{
+		BucketStrategyWindow,
+		BucketStrategyOrdered,
+		BucketStrategyShortlist,
+	}
+	targets := []int{64, 96, 128, 192, 256}
+
+	for _, strategy := range strategies {
+		for _, target := range targets {
+			strategy := strategy
+			target := target
+
+			b.Run(string(strategy)+"_target_"+strconv.Itoa(target), func(b *testing.B) {
+				cfg := searchConfig{
+					bucketTargetCandidates: target,
+					bucketMaxSearchRadius:  3,
+				}
+				totalProcessed := 0
+				maxProcessed := 0
+
+				for b.Loop() {
+					_, stats := findTop5WithStats(query, store, strategy, cfg)
+					totalProcessed += stats.processedCandidates
+					if stats.processedCandidates > maxProcessed {
+						maxProcessed = stats.processedCandidates
+					}
+				}
+
+				b.ReportMetric(float64(totalProcessed)/float64(b.N), "avg_candidates/op")
+				b.ReportMetric(float64(maxProcessed), "max_candidates")
+			})
+		}
+	}
+}
+
 func BenchmarkSelectBucketWindow(b *testing.B) {
 	b.ReportAllocs()
 
@@ -143,6 +189,26 @@ func TestSelectBucketWindowUsesTargetCandidates(t *testing.T) {
 
 	if candidateCount < 64 {
 		t.Fatalf("candidateCount = %d, want at least 64", candidateCount)
+	}
+}
+
+func TestShortlistCapsProcessedCandidates(t *testing.T) {
+	t.Parallel()
+
+	query := sampleRequestVector()
+	store := &dataset.VectorStore{
+		QuantizedVectors: benchmarkQuantizedVectors(4096),
+		Labels:           benchmarkLabels(4096),
+		Count:            4096,
+	}
+	dataset.BuildBucketIndex(store)
+
+	_, stats := findTop5WithStats(query, store, BucketStrategyShortlist, searchConfig{
+		bucketTargetCandidates: 96,
+		bucketMaxSearchRadius:  3,
+	})
+	if stats.processedCandidates > 96 {
+		t.Fatalf("processedCandidates = %d, want <= 96", stats.processedCandidates)
 	}
 }
 
