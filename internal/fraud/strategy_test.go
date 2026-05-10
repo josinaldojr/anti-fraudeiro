@@ -13,6 +13,7 @@ func TestNormalizeBucketStrategy(t *testing.T) {
 		{name: "default", input: "", want: BucketStrategyWindow},
 		{name: "window", input: "window", want: BucketStrategyWindow},
 		{name: "ordered", input: "ordered", want: BucketStrategyOrdered},
+		{name: "ivf", input: "ivf", want: BucketStrategyIVF},
 		{name: "mixed case", input: " OrDeReD ", want: BucketStrategyOrdered},
 		{name: "unknown", input: "foo", want: BucketStrategyWindow},
 	}

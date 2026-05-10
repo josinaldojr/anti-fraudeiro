@@ -72,3 +72,34 @@ func TestCountBucketWindowCandidatesMatchesBucketLengths(t *testing.T) {
 		t.Fatalf("CountBucketWindowCandidates = %d, want %d", actual, expected)
 	}
 }
+
+func TestBuildIVFIndex(t *testing.T) {
+	t.Parallel()
+
+	store := &VectorStore{
+		QuantizedVectors: []uint16{
+			QuantizeComponent(0.10), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.20), QuantizeComponent(0.30), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.40), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.50), QuantizeComponent(0),
+			QuantizeComponent(0.11), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.21), QuantizeComponent(0.31), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.41), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.51), QuantizeComponent(0),
+			QuantizeComponent(0.75), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.80), QuantizeComponent(0.20), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.60), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.10), QuantizeComponent(0),
+		},
+		Labels: []byte{LabelLegit, LabelFraud, LabelLegit},
+		Count:  3,
+	}
+	BuildBucketIndex(store)
+	BuildIVFIndex(store, 2)
+
+	if len(store.IVFCentroids) != 2*IVFCoarseDimensions {
+		t.Fatalf("ivf centroids len = %d, want %d", len(store.IVFCentroids), 2*IVFCoarseDimensions)
+	}
+	if len(store.IVFLists) != 2 {
+		t.Fatalf("ivf lists len = %d, want 2", len(store.IVFLists))
+	}
+
+	totalBuckets := 0
+	for _, list := range store.IVFLists {
+		totalBuckets += len(list)
+	}
+	if totalBuckets == 0 {
+		t.Fatalf("expected non-empty ivf lists")
+	}
+}

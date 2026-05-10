@@ -8,6 +8,7 @@ const (
 	BucketStrategyWindow    BucketStrategy = "window"
 	BucketStrategyShortlist BucketStrategy = "shortlist"
 	BucketStrategyOrdered   BucketStrategy = "ordered"
+	BucketStrategyIVF       BucketStrategy = "ivf"
 )
 
 func NormalizeBucketStrategy(value string) BucketStrategy {
@@ -16,6 +17,8 @@ func NormalizeBucketStrategy(value string) BucketStrategy {
 		return BucketStrategyShortlist
 	case BucketStrategyOrdered:
 		return BucketStrategyOrdered
+	case BucketStrategyIVF:
+		return BucketStrategyIVF
 	case "window-legacy":
 		return BucketStrategyWindow
 	default:

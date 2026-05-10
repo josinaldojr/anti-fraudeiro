@@ -30,6 +30,10 @@ type strategySummary struct {
 func main() {
 	inputPath := flag.String("input", filepath.Join("resources", dataset.BinaryReferenceFile), "path to the references dataset")
 	queryCount := flag.Int("queries", 2000, "number of dataset vectors to sample as evaluation queries")
+	ivfListCount := flag.Int("ivf-lists", 128, "number of IVF coarse lists")
+	ivfNProbe := flag.Int("ivf-nprobe", 4, "number of IVF lists to probe")
+	targetCandidates := flag.Int("target", 256, "target candidate count for bucketed strategies")
+	maxRadius := flag.Int("radius", 3, "max search radius for window-like strategies")
 	flag.Parse()
 
 	store, err := dataset.LoadVectorStore(*inputPath)
@@ -37,6 +41,9 @@ func main() {
 		log.Fatal(err)
 	}
 	defer store.Close()
+	dataset.BuildIVFIndex(store, *ivfListCount)
+	fraud.SetDefaultSearchConfig(*targetCandidates, *maxRadius)
+	fraud.SetDefaultIVFNProbe(*ivfNProbe)
 
 	totalQueries := min(max(*queryCount, 1), store.Count)
 	queryIndices := sampleQueryIndices(store.Count, totalQueries)
@@ -52,6 +59,7 @@ func main() {
 	strategies := []fraud.BucketStrategy{
 		fraud.BucketStrategyWindow,
 		fraud.BucketStrategyOrdered,
+		fraud.BucketStrategyIVF,
 	}
 
 	summaries := make([]strategySummary, 0, len(strategies))

@@ -24,6 +24,8 @@ type Config struct {
 	BucketTargetCandidates     int
 	BucketMaxSearchRadius      int
 	EnableSecondaryBucketIndex bool
+	IVFListCount               int
+	IVFNProbe                  int
 }
 
 type Normalization struct {
@@ -59,6 +61,8 @@ func Load() Config {
 		BucketTargetCandidates:     envIntOrDefault("BUCKET_TARGET_CANDIDATES", 256),
 		BucketMaxSearchRadius:      envIntOrDefault("BUCKET_MAX_SEARCH_RADIUS", 3),
 		EnableSecondaryBucketIndex: envBoolOrDefault("ENABLE_SECONDARY_BUCKET_INDEX", false),
+		IVFListCount:               envIntOrDefault("IVF_LIST_COUNT", 128),
+		IVFNProbe:                  envIntOrDefault("IVF_NPROBE", 4),
 	}
 }
 

@@ -40,13 +40,17 @@ func run() error {
 	}
 	defer store.Close()
 
+	bucketStrategy := fraud.NormalizeBucketStrategy(cfg.BucketStrategy)
 	if cfg.EnableSecondaryBucketIndex {
 		dataset.BuildSecondaryBucketIndex(store)
 	}
+	if bucketStrategy == fraud.BucketStrategyIVF {
+		dataset.BuildIVFIndex(store, cfg.IVFListCount)
+	}
 
 	vectorizer := fraud.NewVectorizer(normalization, mccRisk)
-	bucketStrategy := fraud.NormalizeBucketStrategy(cfg.BucketStrategy)
 	fraud.SetDefaultSearchConfig(cfg.BucketTargetCandidates, cfg.BucketMaxSearchRadius)
+	fraud.SetDefaultIVFNProbe(cfg.IVFNProbe)
 	scorer := fraud.NewScorer(vectorizer, store, bucketStrategy)
 	handler := api.NewHandler(scorer, cfg.MaxConcurrentFraudRequests)
 
@@ -88,11 +92,13 @@ func logDatasetStartup(cfg config.Config, store *dataset.VectorStore, bucketStra
 
 	log.Printf("loaded references from %s", cfg.ReferencesPath)
 	log.Printf(
-		"reference vectors count=%d reference_format=%s bucket_index_enabled=%t secondary_bucket_index_enabled=%t gomaxprocs=%d gc_percent=%d memory_limit_mib=%d max_concurrent_fraud_requests=%d bucket_strategy=%s",
+		"reference vectors count=%d reference_format=%s bucket_index_enabled=%t secondary_bucket_index_enabled=%t ivf_index_enabled=%t ivf_list_count=%d gomaxprocs=%d gc_percent=%d memory_limit_mib=%d max_concurrent_fraud_requests=%d bucket_strategy=%s",
 		store.Count,
 		format,
 		len(store.BucketIndex) > 0,
 		len(store.SecondaryBucketIndex) > 0,
+		len(store.IVFLists) > 0,
+		len(store.IVFLists),
 		runtime.GOMAXPROCS(0),
 		cfg.GCPercent,
 		cfg.MemoryLimitMiB,
@@ -100,8 +106,9 @@ func logDatasetStartup(cfg config.Config, store *dataset.VectorStore, bucketStra
 		bucketStrategy,
 	)
 	log.Printf(
-		"bucket_target_candidates=%d bucket_max_search_radius=%d",
+		"bucket_target_candidates=%d bucket_max_search_radius=%d ivf_nprobe=%d",
 		cfg.BucketTargetCandidates,
 		cfg.BucketMaxSearchRadius,
+		cfg.IVFNProbe,
 	)
 }

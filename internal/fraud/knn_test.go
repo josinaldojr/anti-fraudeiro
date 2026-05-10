@@ -39,6 +39,10 @@ func TestFindTop5(t *testing.T) {
 	if fraudCount := FindTop5WithStrategy(query, store, BucketStrategyOrdered); fraudCount != 3 {
 		t.Fatalf("FindTop5WithStrategy ordered fraud count = %d, want 3", fraudCount)
 	}
+	dataset.BuildIVFIndex(store, 2)
+	if fraudCount := FindTop5WithStrategy(query, store, BucketStrategyIVF); fraudCount != 3 {
+		t.Fatalf("FindTop5WithStrategy ivf fraud count = %d, want 3", fraudCount)
+	}
 
 	if fraudCount := FindTop5Exact(query, store); fraudCount != 3 {
 		t.Fatalf("FindTop5Exact fraud count = %d, want 3", fraudCount)
@@ -55,6 +59,7 @@ func BenchmarkFindTop5(b *testing.B) {
 		Count:            1024,
 	}
 	dataset.BuildBucketIndex(store)
+	dataset.BuildIVFIndex(store, 32)
 
 	for b.Loop() {
 		_ = FindTop5(query, store)
@@ -71,6 +76,7 @@ func BenchmarkFindTop5BucketConfigs(b *testing.B) {
 		Count:            1024,
 	}
 	dataset.BuildBucketIndex(store)
+	dataset.BuildIVFIndex(store, 32)
 
 	configurations := []searchConfig{
 		{bucketTargetCandidates: 64, bucketMaxSearchRadius: 2},
@@ -108,6 +114,7 @@ func BenchmarkFindTop5StrategyMatrix(b *testing.B) {
 		BucketStrategyWindow,
 		BucketStrategyOrdered,
 		BucketStrategyShortlist,
+		BucketStrategyIVF,
 	}
 	targets := []int{64, 96, 128, 192, 256}
 
@@ -120,6 +127,7 @@ func BenchmarkFindTop5StrategyMatrix(b *testing.B) {
 				cfg := searchConfig{
 					bucketTargetCandidates: target,
 					bucketMaxSearchRadius:  3,
+					ivfNProbe:              4,
 				}
 				totalProcessed := 0
 				maxProcessed := 0
@@ -148,6 +156,7 @@ func BenchmarkSelectBucketWindow(b *testing.B) {
 		Count:            1024,
 	}
 	dataset.BuildBucketIndex(store)
+	dataset.BuildIVFIndex(store, 32)
 
 	cfg := searchConfig{bucketTargetCandidates: 256, bucketMaxSearchRadius: 3}
 
@@ -202,6 +211,7 @@ func TestShortlistCapsProcessedCandidates(t *testing.T) {
 		Count:            4096,
 	}
 	dataset.BuildBucketIndex(store)
+	dataset.BuildIVFIndex(store, 64)
 
 	_, stats := findTop5WithStats(query, store, BucketStrategyShortlist, searchConfig{
 		bucketTargetCandidates: 96,
@@ -209,6 +219,15 @@ func TestShortlistCapsProcessedCandidates(t *testing.T) {
 	})
 	if stats.processedCandidates > 96 {
 		t.Fatalf("processedCandidates = %d, want <= 96", stats.processedCandidates)
+	}
+
+	_, stats = findTop5WithStats(query, store, BucketStrategyIVF, searchConfig{
+		bucketTargetCandidates: 96,
+		bucketMaxSearchRadius:  3,
+		ivfNProbe:              4,
+	})
+	if stats.processedCandidates > 96 {
+		t.Fatalf("ivf processedCandidates = %d, want <= 96", stats.processedCandidates)
 	}
 }
 

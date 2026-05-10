@@ -13,12 +13,15 @@ const (
 	secondaryFallbackMaxPrimaryCandidates = 96
 	secondaryFallbackMaxBucketSize        = 256
 	maxWindowBuckets                      = 2401
+	maxIVFLists                           = 256
+	maxIVFBucketCandidates                = 4096
 	maxShortlistCandidates                = 256
 )
 
 type searchConfig struct {
 	bucketTargetCandidates int
 	bucketMaxSearchRadius  int
+	ivfNProbe              int
 }
 
 type searchStats struct {
@@ -27,6 +30,8 @@ type searchStats struct {
 
 type knnScratch struct {
 	bucketCandidates [maxWindowBuckets]bucketCandidate
+	ivfLists         [maxIVFLists]bucketCandidate
+	ivfBuckets       [maxIVFBucketCandidates]bucketCandidate
 	shortlist        [maxShortlistCandidates]uint32
 	seen             [candidateSeenLimit]uint32
 }
@@ -40,6 +45,7 @@ var knnScratchPool = sync.Pool{
 var defaultSearchConfig = searchConfig{
 	bucketTargetCandidates: 256,
 	bucketMaxSearchRadius:  3,
+	ivfNProbe:              4,
 }
 
 func SetDefaultSearchConfig(bucketTargetCandidates int, bucketMaxSearchRadius int) {
@@ -48,6 +54,13 @@ func SetDefaultSearchConfig(bucketTargetCandidates int, bucketMaxSearchRadius in
 	}
 	if bucketMaxSearchRadius >= 0 && bucketMaxSearchRadius <= 3 {
 		defaultSearchConfig.bucketMaxSearchRadius = bucketMaxSearchRadius
+	}
+	defaultSearchConfig = normalizeSearchConfig(defaultSearchConfig)
+}
+
+func SetDefaultIVFNProbe(ivfNProbe int) {
+	if ivfNProbe > 0 {
+		defaultSearchConfig.ivfNProbe = ivfNProbe
 	}
 	defaultSearchConfig = normalizeSearchConfig(defaultSearchConfig)
 }
@@ -105,6 +118,12 @@ func normalizeSearchConfig(cfg searchConfig) searchConfig {
 	}
 	if cfg.bucketMaxSearchRadius > 3 {
 		cfg.bucketMaxSearchRadius = 3
+	}
+	if cfg.ivfNProbe < 1 {
+		cfg.ivfNProbe = 1
+	}
+	if cfg.ivfNProbe > maxIVFLists {
+		cfg.ivfNProbe = maxIVFLists
 	}
 
 	return cfg
@@ -203,6 +222,9 @@ func findTop5Float32Bucketed(query [14]float32, store *dataset.VectorStore, stra
 
 	vectors := store.Vectors
 	labels := store.Labels
+	if strategy == BucketStrategyIVF && len(store.IVFLists) == 0 {
+		strategy = BucketStrategyWindow
+	}
 	amountBucket, hourBucket, dayBucket, tx24hBucket := dataset.BucketCoordinatesFromQuery(q0, q3, q4, q8)
 	amountStart, amountEnd, hourStart, hourEnd, dayStart, dayEnd, txStart, txEnd, candidateCount :=
 		selectBucketWindow(store.BucketIndex, store.BucketPrefixSums, amountBucket, hourBucket, dayBucket, tx24hBucket, cfg)
@@ -212,6 +234,29 @@ func findTop5Float32Bucketed(query [14]float32, store *dataset.VectorStore, stra
 	defer knnScratchPool.Put(scratch)
 	seenCount := 0
 	switch strategy {
+	case BucketStrategyIVF:
+		shortlistCount := collectIVFShortlist(
+			scratch.shortlist[:cfg.bucketTargetCandidates],
+			scratch.ivfLists[:],
+			scratch.ivfBuckets[:],
+			store,
+			q0,
+			q3,
+			q4,
+			q8,
+			cfg.ivfNProbe,
+		)
+		stats.processedCandidates = scanFloatCandidates(
+			scratch.shortlist[:shortlistCount],
+			vectors,
+			labels,
+			q0, q1, q2, q3, q4, q5, q6, q7, q8, q9, q10, q11, q12, q13,
+			&bestDistances,
+			&bestLabels,
+			trackSeen,
+			&scratch.seen,
+			&seenCount,
+		)
 	case BucketStrategyOrdered:
 		bucketCount, _ := collectOrderedBucketCandidates(
 			scratch.bucketCandidates[:],
@@ -428,6 +473,9 @@ func findTop5QuantizedBucketed(
 ) (fraudCount int, stats searchStats) {
 	vectors := store.QuantizedVectors
 	labels := store.Labels
+	if strategy == BucketStrategyIVF && len(store.IVFLists) == 0 {
+		strategy = BucketStrategyWindow
+	}
 	amountBucket, hourBucket, dayBucket, tx24hBucket := dataset.BucketCoordinatesFromQuery(
 		dataset.DequantizeComponent(uint16(q0)),
 		dataset.DequantizeComponent(uint16(q3)),
@@ -444,6 +492,29 @@ func findTop5QuantizedBucketed(
 	seenCount := 0
 
 	switch strategy {
+	case BucketStrategyIVF:
+		shortlistCount := collectIVFShortlist(
+			scratch.shortlist[:cfg.bucketTargetCandidates],
+			scratch.ivfLists[:],
+			scratch.ivfBuckets[:],
+			store,
+			dataset.DequantizeComponent(uint16(q0)),
+			dataset.DequantizeComponent(uint16(q3)),
+			dataset.DequantizeComponent(uint16(q4)),
+			dataset.DequantizeComponent(uint16(q8)),
+			cfg.ivfNProbe,
+		)
+		stats.processedCandidates = scanQuantizedCandidates(
+			scratch.shortlist[:shortlistCount],
+			vectors,
+			labels,
+			q0, q1, q2, q3, q4, q5, q6, q7, q8, q9, q10, q11, q12, q13,
+			&bestDistances,
+			&bestLabels,
+			trackSeen,
+			&scratch.seen,
+			&seenCount,
+		)
 	case BucketStrategyOrdered:
 		queryAmount := dataset.DequantizeComponent(uint16(q0))
 		queryHour := dataset.DequantizeComponent(uint16(q3))
@@ -686,6 +757,175 @@ func collectShortlist(
 	}
 
 	return shortlistCount
+}
+
+func collectIVFShortlist(
+	shortlist []uint32,
+	listCandidates []bucketCandidate,
+	bucketCandidates []bucketCandidate,
+	store *dataset.VectorStore,
+	queryAmount float32,
+	queryHour float32,
+	queryDay float32,
+	queryTx24h float32,
+	nprobe int,
+) int {
+	listCount := collectNearestIVFLists(
+		listCandidates,
+		store.IVFCentroids,
+		queryAmount,
+		queryHour,
+		queryDay,
+		queryTx24h,
+		nprobe,
+	)
+	if listCount == 0 {
+		return 0
+	}
+
+	bucketCount := collectIVFBucketCandidates(
+		bucketCandidates,
+		store.IVFLists,
+		queryAmount,
+		queryHour,
+		queryDay,
+		queryTx24h,
+		listCandidates[:listCount],
+	)
+	if bucketCount == 0 {
+		return 0
+	}
+
+	shortlistCount := 0
+	for candidateIndex := 0; candidateIndex < bucketCount && shortlistCount < len(shortlist); candidateIndex++ {
+		bucketID := bucketCandidates[candidateIndex].id
+		bucketVectors := store.BucketIndex[bucketID]
+		remaining := len(shortlist) - shortlistCount
+		if len(bucketVectors) > remaining {
+			copy(shortlist[shortlistCount:], bucketVectors[:remaining])
+			shortlistCount += remaining
+			break
+		}
+
+		copy(shortlist[shortlistCount:], bucketVectors)
+		shortlistCount += len(bucketVectors)
+	}
+
+	return shortlistCount
+}
+
+func collectNearestIVFLists(
+	candidates []bucketCandidate,
+	centroids []float32,
+	queryAmount float32,
+	queryHour float32,
+	queryDay float32,
+	queryTx24h float32,
+	nprobe int,
+) int {
+	if len(centroids) == 0 || len(candidates) == 0 {
+		return 0
+	}
+
+	if nprobe > len(candidates) {
+		nprobe = len(candidates)
+	}
+	if totalLists := len(centroids) / dataset.IVFCoarseDimensions; nprobe > totalLists {
+		nprobe = totalLists
+	}
+	if nprobe <= 0 {
+		return 0
+	}
+
+	count := 0
+	for listIndex, baseOffset := 0, 0; baseOffset < len(centroids); listIndex, baseOffset = listIndex+1, baseOffset+dataset.IVFCoarseDimensions {
+		d0 := queryAmount - centroids[baseOffset]
+		d1 := queryHour - centroids[baseOffset+1]
+		d2 := queryDay - centroids[baseOffset+2]
+		d3 := queryTx24h - centroids[baseOffset+3]
+		distance := d0*d0 + d1*d1 + d2*d2 + d3*d3
+
+		if count < nprobe {
+			candidates[count] = bucketCandidate{id: listIndex, distance: distance}
+			count++
+			if count == nprobe {
+				sort.Sort(sort.Reverse(bucketCandidateSlice(candidates[:count])))
+			}
+			continue
+		}
+
+		if distance >= candidates[0].distance {
+			continue
+		}
+
+		candidates[0] = bucketCandidate{id: listIndex, distance: distance}
+		sort.Sort(sort.Reverse(bucketCandidateSlice(candidates[:count])))
+	}
+
+	sort.Sort(bucketCandidateSlice(candidates[:count]))
+	return count
+}
+
+func collectIVFBucketCandidates(
+	candidates []bucketCandidate,
+	lists [][]uint32,
+	queryAmount float32,
+	queryHour float32,
+	queryDay float32,
+	queryTx24h float32,
+	selectedLists []bucketCandidate,
+) int {
+	if len(candidates) == 0 {
+		return 0
+	}
+
+	count := 0
+	for _, listCandidate := range selectedLists {
+		for _, bucketID := range lists[listCandidate.id] {
+			amountBucket, hourBucket, dayBucket, txBucket := datasetBucketCoordinatesFromID(int(bucketID))
+			d0 := queryAmount - datasetBucketCenter(amountBucket, dataset.AmountBucketCount)
+			d1 := queryHour - datasetBucketCenter(hourBucket, dataset.HourBucketCount)
+			d2 := queryDay - datasetBucketCenter(dayBucket, dataset.DayBucketCount)
+			d3 := queryTx24h - datasetBucketCenter(txBucket, dataset.Tx24hBucketCount)
+			distance := d0*d0 + d1*d1 + d2*d2 + d3*d3
+
+			if count < len(candidates) {
+				candidates[count] = bucketCandidate{id: int(bucketID), distance: distance}
+				count++
+				continue
+			}
+
+			worstIndex := 0
+			worstDistance := candidates[0].distance
+			for index := 1; index < count; index++ {
+				if candidates[index].distance > worstDistance {
+					worstIndex = index
+					worstDistance = candidates[index].distance
+				}
+			}
+			if distance < worstDistance {
+				candidates[worstIndex] = bucketCandidate{id: int(bucketID), distance: distance}
+			}
+		}
+	}
+
+	sort.Sort(bucketCandidateSlice(candidates[:count]))
+	return count
+}
+
+func datasetBucketCoordinatesFromID(bucketID int) (amountBucket int, hourBucket int, dayBucket int, txBucket int) {
+	txBucket = bucketID % dataset.Tx24hBucketCount
+	bucketID /= dataset.Tx24hBucketCount
+	dayBucket = bucketID % dataset.DayBucketCount
+	bucketID /= dataset.DayBucketCount
+	hourBucket = bucketID % dataset.HourBucketCount
+	bucketID /= dataset.HourBucketCount
+	amountBucket = bucketID
+	return
+}
+
+func datasetBucketCenter(bucket int, bucketCount int) float32 {
+	return (float32(bucket) + 0.5) / float32(bucketCount)
 }
 
 func scanFloatCandidates(
