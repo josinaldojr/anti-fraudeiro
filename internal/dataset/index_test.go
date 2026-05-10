@@ -1,6 +1,9 @@
 package dataset
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 func TestBuildSecondaryBucketIndex(t *testing.T) {
 	t.Parallel()
@@ -101,5 +104,41 @@ func TestBuildIVFIndex(t *testing.T) {
 	}
 	if totalBuckets == 0 {
 		t.Fatalf("expected non-empty ivf lists")
+	}
+}
+
+func TestBuildIVFIndexUsesBucketContentSummary(t *testing.T) {
+	t.Parallel()
+
+	store := &VectorStore{
+		Vectors: []float32{
+			0.10, 0, 0.20, 0.25, 0.30, 0, 0, 0, 0.40, 0, 0, 0, 0.80, 0,
+			0.11, 0, 0.60, 0.26, 0.31, 0, 0, 0, 0.41, 0, 0, 0, 0.20, 0,
+		},
+		Labels: []byte{LabelLegit, LabelFraud},
+		Count:  2,
+	}
+	BuildBucketIndex(store)
+	BuildIVFIndex(store, 1)
+
+	amountBucket, hourBucket, dayBucket, txBucket := BucketCoordinatesFromQuery(
+		store.Vectors[0],
+		store.Vectors[3],
+		store.Vectors[4],
+		store.Vectors[8],
+	)
+	bucketID := BucketIDFromCoordinates(amountBucket, hourBucket, dayBucket, txBucket)
+
+	if len(store.IVFBucketSummaries) != BucketIndexCount*IVFCoarseDimensions {
+		t.Fatalf("ivf bucket summaries len = %d, want %d", len(store.IVFBucketSummaries), BucketIndexCount*IVFCoarseDimensions)
+	}
+
+	baseOffset := bucketID * IVFCoarseDimensions
+	expected := []float32{0.105, 0.255, 0.305, 0.405, 0.40, 0.50}
+	for index, want := range expected {
+		got := store.IVFBucketSummaries[baseOffset+index]
+		if math.Abs(float64(got-want)) > 1e-6 {
+			t.Fatalf("bucket summary dim %d = %f, want %f", index, got, want)
+		}
 	}
 }

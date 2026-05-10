@@ -131,6 +131,13 @@ func BenchmarkFindTop5StrategyMatrix(b *testing.B) {
 				}
 				totalProcessed := 0
 				maxProcessed := 0
+				totalAvailable := 0
+				maxAvailable := 0
+				totalBuckets := 0
+				maxBuckets := 0
+				totalLists := 0
+				maxLists := 0
+				truncatedCount := 0
 
 				for b.Loop() {
 					_, stats := findTop5WithStats(query, store, strategy, cfg)
@@ -138,10 +145,32 @@ func BenchmarkFindTop5StrategyMatrix(b *testing.B) {
 					if stats.processedCandidates > maxProcessed {
 						maxProcessed = stats.processedCandidates
 					}
+					totalAvailable += stats.availableCandidates
+					if stats.availableCandidates > maxAvailable {
+						maxAvailable = stats.availableCandidates
+					}
+					totalBuckets += stats.bucketsVisited
+					if stats.bucketsVisited > maxBuckets {
+						maxBuckets = stats.bucketsVisited
+					}
+					totalLists += stats.probedLists
+					if stats.probedLists > maxLists {
+						maxLists = stats.probedLists
+					}
+					if stats.shortlistTruncated {
+						truncatedCount++
+					}
 				}
 
 				b.ReportMetric(float64(totalProcessed)/float64(b.N), "avg_candidates/op")
 				b.ReportMetric(float64(maxProcessed), "max_candidates")
+				b.ReportMetric(float64(totalAvailable)/float64(b.N), "avg_available/op")
+				b.ReportMetric(float64(maxAvailable), "max_available")
+				b.ReportMetric(float64(totalBuckets)/float64(b.N), "avg_buckets/op")
+				b.ReportMetric(float64(maxBuckets), "max_buckets")
+				b.ReportMetric(float64(totalLists)/float64(b.N), "avg_lists/op")
+				b.ReportMetric(float64(maxLists), "max_lists")
+				b.ReportMetric(float64(truncatedCount)/float64(b.N), "trunc_rate")
 			})
 		}
 	}
