@@ -4,6 +4,11 @@ func BuildBucketIndex(store *VectorStore) {
 	if store == nil || store.Count == 0 {
 		return
 	}
+	if len(store.BucketMeta) == BucketIndexCount {
+		store.BucketIndex = nil
+		store.BucketPrefixSums = buildBucketPrefixSumsFromMeta(store.BucketMeta)
+		return
+	}
 
 	buckets := make([][]uint32, BucketIndexCount)
 
@@ -14,7 +19,6 @@ func BuildBucketIndex(store *VectorStore) {
 		}
 		store.BucketIndex = buckets
 		store.BucketPrefixSums = buildBucketPrefixSums(buckets)
-		store.SecondaryBucketIndex = nil
 		return
 	}
 
@@ -25,7 +29,6 @@ func BuildBucketIndex(store *VectorStore) {
 
 	store.BucketIndex = buckets
 	store.BucketPrefixSums = buildBucketPrefixSums(buckets)
-	store.SecondaryBucketIndex = nil
 }
 
 func CountBucketWindowCandidates(
@@ -73,30 +76,6 @@ func CountBucketWindowCandidates(
 	return int(total)
 }
 
-func BuildSecondaryBucketIndex(store *VectorStore) {
-	if store == nil || store.Count == 0 {
-		return
-	}
-
-	buckets := make([][]uint32, SecondaryBucketIndexCount)
-
-	if len(store.QuantizedVectors) > 0 {
-		for recordIndex, baseOffset := 0, 0; recordIndex < store.Count; recordIndex, baseOffset = recordIndex+1, baseOffset+VectorSize {
-			bucketID := secondaryBucketIDFromQuantized(store.QuantizedVectors, baseOffset)
-			buckets[bucketID] = append(buckets[bucketID], uint32(recordIndex))
-		}
-		store.SecondaryBucketIndex = buckets
-		return
-	}
-
-	for recordIndex, baseOffset := 0, 0; recordIndex < store.Count; recordIndex, baseOffset = recordIndex+1, baseOffset+VectorSize {
-		bucketID := secondaryBucketIDFromFloat32(store.Vectors, baseOffset)
-		buckets[bucketID] = append(buckets[bucketID], uint32(recordIndex))
-	}
-
-	store.SecondaryBucketIndex = buckets
-}
-
 func ReorderStoreByBucket(store *VectorStore) {
 	if store == nil || store.Count == 0 {
 		return
@@ -138,7 +117,7 @@ func ReorderStoreByBucket(store *VectorStore) {
 
 	store.Labels = reorderedLabels
 	store.QuantizedVectors = reorderedQuantized
-	store.Vectors = nil      // We are moving to quantized only in binary
+	store.Vectors = nil // We are moving to quantized only in binary
 	store.BucketMeta = bucketMeta
 	store.BucketIndex = nil // No longer needed
 }
@@ -160,17 +139,6 @@ func BucketIDFromCoordinates(amountBucket int, hourBucket int, dayBucket int, tx
 	return bucketID(amountBucket, hourBucket, dayBucket, tx24hBucket)
 }
 
-func SecondaryBucketCoordinatesFromQuery(amount float32, hour float32, day float32, risk float32) (int, int, int, int) {
-	return scalarBucket(amount, AmountBucketCount),
-		scalarBucket(hour, HourBucketCount),
-		scalarBucket(day, DayBucketCount),
-		scalarBucket(risk, RiskBucketCount)
-}
-
-func SecondaryBucketIDFromCoordinates(amountBucket int, hourBucket int, dayBucket int, riskBucket int) int {
-	return secondaryBucketID(amountBucket, hourBucket, dayBucket, riskBucket)
-}
-
 func bucketIDFromFloat32(vectors []float32, baseOffset int) int {
 	return bucketID(
 		scalarBucket(vectors[baseOffset], AmountBucketCount),
@@ -189,30 +157,8 @@ func bucketIDFromQuantized(vectors []uint16, baseOffset int) int {
 	)
 }
 
-func secondaryBucketIDFromFloat32(vectors []float32, baseOffset int) int {
-	return secondaryBucketID(
-		scalarBucket(vectors[baseOffset], AmountBucketCount),
-		scalarBucket(vectors[baseOffset+3], HourBucketCount),
-		scalarBucket(vectors[baseOffset+4], DayBucketCount),
-		scalarBucket(vectors[baseOffset+12], RiskBucketCount),
-	)
-}
-
-func secondaryBucketIDFromQuantized(vectors []uint16, baseOffset int) int {
-	return secondaryBucketID(
-		quantizedScalarBucket(vectors[baseOffset], AmountBucketCount),
-		quantizedScalarBucket(vectors[baseOffset+3], HourBucketCount),
-		quantizedScalarBucket(vectors[baseOffset+4], DayBucketCount),
-		quantizedScalarBucket(vectors[baseOffset+12], RiskBucketCount),
-	)
-}
-
 func bucketID(amountBucket int, hourBucket int, dayBucket int, tx24hBucket int) int {
 	return (((amountBucket*HourBucketCount)+hourBucket)*DayBucketCount+dayBucket)*Tx24hBucketCount + tx24hBucket
-}
-
-func secondaryBucketID(amountBucket int, hourBucket int, dayBucket int, riskBucket int) int {
-	return (((amountBucket*HourBucketCount)+hourBucket)*DayBucketCount+dayBucket)*RiskBucketCount + riskBucket
 }
 
 func scalarBucket(value float32, bucketCount int) int {

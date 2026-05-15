@@ -1,16 +1,13 @@
 APP_NAME=anti-fraudeiro
 IMAGE=ghcr.io/josinaldojr/anti-fraudeiro:latest
 
-.PHONY: prepare-resources preprocess eval-coarse test run docker-build docker-push docker-up docker-down curl-ready curl-fraud-score rinha-smoke rinha-test
+.PHONY: prepare-resources preprocess test run docker-build docker-push docker-up docker-down curl-ready curl-fraud-score rinha-smoke rinha-test
 
 prepare-resources:
 	sh ./scripts/prepare-resources.sh
 
 preprocess:
 	go run ./cmd/preprocess
-
-eval-coarse:
-	go run ./cmd/eval-coarse
 
 test:
 	go test ./...

@@ -20,7 +20,7 @@ The current implementation prioritizes correctness, simplicity, and a clean base
 - `net/http`
 - `goccy/go-json`
 - bucketed approximate KNN
-- IVF coarse index with short exact rerank
+- quantized contiguous bucket scans
 - squared Euclidean distance
 - fixed top-5 tracking without sorting the entire dataset
 
@@ -85,21 +85,10 @@ Environment variables:
 - `GC_PERCENT`
 - `MEMORY_LIMIT_MIB`
 - `MAX_CONCURRENT_FRAUD_REQUESTS`
-- `BUCKET_STRATEGY`
 - `BUCKET_TARGET_CANDIDATES`
 - `BUCKET_MAX_SEARCH_RADIUS`
-- `ENABLE_SECONDARY_BUCKET_INDEX`
-- `IVF_LIST_COUNT`
-- `IVF_NPROBE`
 
 Default HTTP port is `9999`.
-
-Bucket strategy options:
-
-- `window`: baseline bucket-window scan used by default
-- `ordered`: scans whole buckets in coarse-distance order until it reaches the target
-- `shortlist`: scans at most `BUCKET_TARGET_CANDIDATES`, ordered by bucket-center distance
-- `ivf`: probes a small set of coarse inverted lists and exact-reranks only the shortlisted candidates
 
 ## Usage
 
@@ -239,10 +228,9 @@ Useful commands:
 - The application instances run behind the load balancer on port `8080`.
 - The dataset loader supports compact binary, plain JSON, and `gzip`-compressed JSON.
 - The current reference store is kept in contiguous slices for lower overhead on the hot path.
-- Runtime tuning is configurable through `GOMAXPROCS`, `GC_PERCENT`, `MEMORY_LIMIT_MIB`, and `MAX_CONCURRENT_FRAUD_REQUESTS`.
-- The optional `ivf` path builds a coarse inverted index over populated primary buckets and probes only the nearest lists before exact rerank.
-- The optional `shortlist` search path builds a fixed-size candidate list ordered by bucket-center distance and never falls back to a global 3M-vector scan at runtime.
-- Trade-off: `window` preserves more recall but has a less predictable tail on dense regions. `ivf` makes candidate work more predictable and caps rerank cost, but if `IVF_LIST_COUNT` is too low or `IVF_NPROBE` is too small it can lose recall and worsen score. Lower `BUCKET_TARGET_CANDIDATES` is cheaper; higher targets recover accuracy at the cost of more tail latency.
+- Runtime tuning is configurable through `GOMAXPROCS`, `GC_PERCENT`, `MEMORY_LIMIT_MIB`, `MAX_CONCURRENT_FRAUD_REQUESTS`, `BUCKET_TARGET_CANDIDATES`, and `BUCKET_MAX_SEARCH_RADIUS`.
+- The binary dataset is reordered by bucket so each candidate window is scanned as contiguous quantized slices, minimizing pointer chasing and improving cache locality.
+- Higher `BUCKET_TARGET_CANDIDATES` and `BUCKET_MAX_SEARCH_RADIUS` recover accuracy at the cost of more candidate work; the checked-in defaults reflect the best baseline currently tracked in `artifacts/rinha/`.
 
 ## Challenge References
 

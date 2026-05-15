@@ -17,8 +17,6 @@ const (
 	Tx24hBucketCount          = 16
 	RiskBucketCount           = 8
 	BucketIndexCount          = AmountBucketCount * HourBucketCount * DayBucketCount * Tx24hBucketCount
-	SecondaryBucketIndexCount = AmountBucketCount * HourBucketCount * DayBucketCount * RiskBucketCount
-	IVFCoarseDimensions       = 6
 	quantizedMinValue         = float32(-1)
 	quantizedMaxValue         = float32(1)
 	quantizedOffset           = float32(32767.5)
@@ -43,10 +41,6 @@ type VectorStore struct {
 	BucketMeta           []BucketMetadata
 	BucketIndex          [][]uint32
 	BucketPrefixSums     []uint32
-	SecondaryBucketIndex [][]uint32
-	IVFCentroids         []float32
-	IVFBucketSummaries   []float32
-	IVFLists             [][]uint32
 	mappedData           []byte
 }
 
@@ -63,10 +57,6 @@ func (store *VectorStore) Close() error {
 	store.BucketMeta = nil
 	store.BucketIndex = nil
 	store.BucketPrefixSums = nil
-	store.SecondaryBucketIndex = nil
-	store.IVFCentroids = nil
-	store.IVFBucketSummaries = nil
-	store.IVFLists = nil
 
 	return unmapFile(mappedData)
 }

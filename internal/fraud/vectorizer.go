@@ -131,8 +131,20 @@ func boolToFloat32(value bool) float32 {
 }
 
 func (v *Vectorizer) lookupMCCRisk(mcc string) float32 {
-	val, err := strconv.Atoi(mcc)
-	if err != nil || val < 0 || val >= 10000 {
+	if len(mcc) == 0 {
+		return 0.5
+	}
+
+	val := 0
+	for i := 0; i < len(mcc); i++ {
+		c := mcc[i]
+		if c < '0' || c > '9' {
+			return 0.5
+		}
+		val = val*10 + int(c-'0')
+	}
+
+	if val >= 10000 {
 		return 0.5
 	}
 	return v.mccRisk[val]

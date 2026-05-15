@@ -18,8 +18,16 @@ func ParseFraudScoreRequest(data []byte, request *FraudScoreRequest) error {
 		return fmt.Errorf("expected '{'")
 	}
 
-	if err := parseObjectInternal(data, request, ""); err != nil {
+	valueEnd := findValueEnd(data)
+	if valueEnd <= 0 || valueEnd > len(data) {
+		return fmt.Errorf("invalid request object")
+	}
+
+	if err := parseObjectInternal(data[:valueEnd], request, ""); err != nil {
 		return err
+	}
+	if len(skipWS(data[valueEnd:])) != 0 {
+		return fmt.Errorf("unexpected trailing JSON")
 	}
 
 	return nil
@@ -259,7 +267,7 @@ func parseStringArray(data []byte, slice *[]string) error {
 		if len(data) == 0 {
 			break
 		}
-		
+
 		valueEnd := findValueEnd(data)
 		value := data[:valueEnd]
 		data = data[valueEnd:]
@@ -283,13 +291,13 @@ func fastParseFloat(b []byte) float64 {
 	if len(b) == 0 {
 		return 0
 	}
-	
+
 	var neg bool
 	if b[0] == '-' {
 		neg = true
 		b = b[1:]
 	}
-	
+
 	var val int64
 	var dot int = -1
 	for i, c := range b {
@@ -299,22 +307,26 @@ func fastParseFloat(b []byte) float64 {
 			dot = i
 		}
 	}
-	
+
 	res := float64(val)
 	if dot != -1 {
 		shift := len(b) - 1 - dot
 		switch shift {
-		case 1: res /= 10
-		case 2: res /= 100
-		case 3: res /= 1000
-		case 4: res /= 10000
+		case 1:
+			res /= 10
+		case 2:
+			res /= 100
+		case 3:
+			res /= 1000
+		case 4:
+			res /= 10000
 		default:
 			for i := 0; i < shift; i++ {
 				res /= 10
 			}
 		}
 	}
-	
+
 	if neg {
 		return -res
 	}

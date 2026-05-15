@@ -20,12 +20,8 @@ type Config struct {
 	GCPercent                  int
 	MemoryLimitMiB             int64
 	MaxConcurrentFraudRequests int
-	BucketStrategy             string
 	BucketTargetCandidates     int
 	BucketMaxSearchRadius      int
-	EnableSecondaryBucketIndex bool
-	IVFListCount               int
-	IVFNProbe                  int
 }
 
 type Normalization struct {
@@ -54,15 +50,11 @@ func Load() Config {
 		MCCRiskPath:                envOrDefault("MCC_RISK_PATH", filepath.Join(resourceDir, "mcc_risk.json")),
 		NormalizationPath:          envOrDefault("NORMALIZATION_PATH", filepath.Join(resourceDir, "normalization.json")),
 		GOMAXPROCS:                 envIntOrDefault("GOMAXPROCS", 0),
-		GCPercent:                  envIntOrDefault("GC_PERCENT", 100),
-		MemoryLimitMiB:             envInt64OrDefault("MEMORY_LIMIT_MIB", 150),
+		GCPercent:                  envIntOrDefault("GC_PERCENT", 500),
+		MemoryLimitMiB:             envInt64OrDefault("MEMORY_LIMIT_MIB", 0),
 		MaxConcurrentFraudRequests: envIntOrDefault("MAX_CONCURRENT_FRAUD_REQUESTS", 0),
-		BucketStrategy:             envOrDefault("BUCKET_STRATEGY", "window"),
 		BucketTargetCandidates:     envIntOrDefault("BUCKET_TARGET_CANDIDATES", 256),
 		BucketMaxSearchRadius:      envIntOrDefault("BUCKET_MAX_SEARCH_RADIUS", 3),
-		EnableSecondaryBucketIndex: envBoolOrDefault("ENABLE_SECONDARY_BUCKET_INDEX", false),
-		IVFListCount:               envIntOrDefault("IVF_LIST_COUNT", 128),
-		IVFNProbe:                  envIntOrDefault("IVF_NPROBE", 4),
 	}
 }
 
@@ -136,20 +128,4 @@ func envInt64OrDefault(key string, fallback int64) int64 {
 	}
 
 	return parsed
-}
-
-func envBoolOrDefault(key string, fallback bool) bool {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback
-	}
-
-	switch strings.ToLower(value) {
-	case "1", "true", "yes", "on":
-		return true
-	case "0", "false", "no", "off":
-		return false
-	default:
-		return fallback
-	}
 }

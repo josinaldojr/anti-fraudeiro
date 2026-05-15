@@ -8,7 +8,7 @@ import (
 )
 
 const topK = 5
-const knownMerchantSetThreshold = 64
+const knownMerchantSetThreshold = 16
 
 type FraudScoreRequest struct {
 	ID              string           `json:"id"`

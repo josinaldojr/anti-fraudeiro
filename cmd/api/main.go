@@ -40,21 +40,12 @@ func run() error {
 	}
 	defer store.Close()
 
-	bucketStrategy := fraud.NormalizeBucketStrategy(cfg.BucketStrategy)
-	if cfg.EnableSecondaryBucketIndex {
-		dataset.BuildSecondaryBucketIndex(store)
-	}
-	if bucketStrategy == fraud.BucketStrategyIVF {
-		dataset.BuildIVFIndex(store, cfg.IVFListCount)
-	}
-
 	// Warm-up mmap data to avoid page faults during the test
 	warmupDataset(store)
 
 	vectorizer := fraud.NewVectorizer(normalization, mccRisk)
 	fraud.SetDefaultSearchConfig(cfg.BucketTargetCandidates, cfg.BucketMaxSearchRadius)
-	fraud.SetDefaultIVFNProbe(cfg.IVFNProbe)
-	scorer := fraud.NewScorer(vectorizer, store, bucketStrategy)
+	scorer := fraud.NewScorer(vectorizer, store)
 	handler := api.NewHandler(scorer, cfg.MaxConcurrentFraudRequests)
 
 	// Prime the pools
@@ -67,7 +58,7 @@ func run() error {
 		IdleTimeout:       60 * time.Second,
 	}
 
-	logDatasetStartup(cfg, store, bucketStrategy)
+	logDatasetStartup(cfg, store)
 
 	return server.ListenAndServe()
 }
@@ -98,7 +89,7 @@ func applyRuntimeTuning(cfg config.Config) {
 	}
 }
 
-func logDatasetStartup(cfg config.Config, store *dataset.VectorStore, bucketStrategy fraud.BucketStrategy) {
+func logDatasetStartup(cfg config.Config, store *dataset.VectorStore) {
 	format := "float32"
 	if len(store.QuantizedVectors) > 0 {
 		format = "quantized"
@@ -110,23 +101,18 @@ func logDatasetStartup(cfg config.Config, store *dataset.VectorStore, bucketStra
 
 	log.Printf("loaded references from %s", cfg.ReferencesPath)
 	log.Printf(
-		"reference vectors count=%d reference_format=%s bucket_index_enabled=%t secondary_bucket_index_enabled=%t ivf_index_enabled=%t ivf_list_count=%d gomaxprocs=%d gc_percent=%d memory_limit_mib=%d max_concurrent_fraud_requests=%d bucket_strategy=%s",
+		"reference vectors count=%d reference_format=%s bucket_index_enabled=%t gomaxprocs=%d gc_percent=%d memory_limit_mib=%d max_concurrent_fraud_requests=%d",
 		store.Count,
 		format,
-		len(store.BucketIndex) > 0,
-		len(store.SecondaryBucketIndex) > 0,
-		len(store.IVFLists) > 0,
-		len(store.IVFLists),
+		len(store.BucketIndex) > 0 || len(store.BucketMeta) > 0 || len(store.BucketPrefixSums) > 0,
 		runtime.GOMAXPROCS(0),
 		cfg.GCPercent,
 		cfg.MemoryLimitMiB,
 		cfg.MaxConcurrentFraudRequests,
-		bucketStrategy,
 	)
 	log.Printf(
-		"bucket_target_candidates=%d bucket_max_search_radius=%d ivf_nprobe=%d",
+		"bucket_target_candidates=%d bucket_max_search_radius=%d",
 		cfg.BucketTargetCandidates,
 		cfg.BucketMaxSearchRadius,
-		cfg.IVFNProbe,
 	)
 }

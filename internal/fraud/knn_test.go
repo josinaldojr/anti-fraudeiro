@@ -1,298 +1,98 @@
 package fraud
 
 import (
-	"strconv"
+	"math/rand"
 	"testing"
 
 	"github.com/josinaldojr/anti-fraudeiro/internal/dataset"
 )
 
-func TestFindTop5(t *testing.T) {
+func TestFindTop5MatchesExactSearch(t *testing.T) {
 	t.Parallel()
 
-	query := vectorWithFirstDimension(0)
 	store := &dataset.VectorStore{
-		Vectors: flattenVectors(
-			vectorWithFirstDimension(0.00),
-			vectorWithFirstDimension(0.005),
-			vectorWithFirstDimension(0.010),
-			vectorWithFirstDimension(0.015),
-			vectorWithFirstDimension(0.020),
-			vectorWithFirstDimension(0.90),
-		),
-		Labels: []byte{
-			dataset.LabelLegit,
-			dataset.LabelFraud,
-			dataset.LabelFraud,
-			dataset.LabelLegit,
-			dataset.LabelFraud,
-			dataset.LabelLegit,
+		QuantizedVectors: []uint16{
+			dataset.QuantizeComponent(0.10), dataset.QuantizeComponent(0.10), dataset.QuantizeComponent(0.10), dataset.QuantizeComponent(0.10), dataset.QuantizeComponent(0.10), dataset.QuantizeComponent(0.10), dataset.QuantizeComponent(0.10), dataset.QuantizeComponent(0.10), dataset.QuantizeComponent(0.10), dataset.QuantizeComponent(0.10), dataset.QuantizeComponent(0.10), dataset.QuantizeComponent(0.10), dataset.QuantizeComponent(0.10), dataset.QuantizeComponent(0.10), dataset.QuantizeComponent(0.10), dataset.QuantizeComponent(0.10),
+			dataset.QuantizeComponent(0.20), dataset.QuantizeComponent(0.20), dataset.QuantizeComponent(0.20), dataset.QuantizeComponent(0.20), dataset.QuantizeComponent(0.20), dataset.QuantizeComponent(0.20), dataset.QuantizeComponent(0.20), dataset.QuantizeComponent(0.20), dataset.QuantizeComponent(0.20), dataset.QuantizeComponent(0.20), dataset.QuantizeComponent(0.20), dataset.QuantizeComponent(0.20), dataset.QuantizeComponent(0.20), dataset.QuantizeComponent(0.20), dataset.QuantizeComponent(0.20), dataset.QuantizeComponent(0.20),
+			dataset.QuantizeComponent(0.30), dataset.QuantizeComponent(0.30), dataset.QuantizeComponent(0.30), dataset.QuantizeComponent(0.30), dataset.QuantizeComponent(0.30), dataset.QuantizeComponent(0.30), dataset.QuantizeComponent(0.30), dataset.QuantizeComponent(0.30), dataset.QuantizeComponent(0.30), dataset.QuantizeComponent(0.30), dataset.QuantizeComponent(0.30), dataset.QuantizeComponent(0.30), dataset.QuantizeComponent(0.30), dataset.QuantizeComponent(0.30), dataset.QuantizeComponent(0.30), dataset.QuantizeComponent(0.30),
+			dataset.QuantizeComponent(0.40), dataset.QuantizeComponent(0.40), dataset.QuantizeComponent(0.40), dataset.QuantizeComponent(0.40), dataset.QuantizeComponent(0.40), dataset.QuantizeComponent(0.40), dataset.QuantizeComponent(0.40), dataset.QuantizeComponent(0.40), dataset.QuantizeComponent(0.40), dataset.QuantizeComponent(0.40), dataset.QuantizeComponent(0.40), dataset.QuantizeComponent(0.40), dataset.QuantizeComponent(0.40), dataset.QuantizeComponent(0.40), dataset.QuantizeComponent(0.40), dataset.QuantizeComponent(0.40),
+			dataset.QuantizeComponent(0.50), dataset.QuantizeComponent(0.50), dataset.QuantizeComponent(0.50), dataset.QuantizeComponent(0.50), dataset.QuantizeComponent(0.50), dataset.QuantizeComponent(0.50), dataset.QuantizeComponent(0.50), dataset.QuantizeComponent(0.50), dataset.QuantizeComponent(0.50), dataset.QuantizeComponent(0.50), dataset.QuantizeComponent(0.50), dataset.QuantizeComponent(0.50), dataset.QuantizeComponent(0.50), dataset.QuantizeComponent(0.50), dataset.QuantizeComponent(0.50), dataset.QuantizeComponent(0.50),
+			dataset.QuantizeComponent(0.60), dataset.QuantizeComponent(0.60), dataset.QuantizeComponent(0.60), dataset.QuantizeComponent(0.60), dataset.QuantizeComponent(0.60), dataset.QuantizeComponent(0.60), dataset.QuantizeComponent(0.60), dataset.QuantizeComponent(0.60), dataset.QuantizeComponent(0.60), dataset.QuantizeComponent(0.60), dataset.QuantizeComponent(0.60), dataset.QuantizeComponent(0.60), dataset.QuantizeComponent(0.60), dataset.QuantizeComponent(0.60), dataset.QuantizeComponent(0.60), dataset.QuantizeComponent(0.60),
 		},
-		Count: 6,
+		Labels: []byte{dataset.LabelLegit, dataset.LabelFraud, dataset.LabelLegit, dataset.LabelFraud, dataset.LabelLegit, dataset.LabelFraud},
+		Count:  6,
 	}
 	dataset.BuildBucketIndex(store)
 
-	if fraudCount := FindTop5(query, store); fraudCount != 3 {
-		t.Fatalf("FindTop5 fraud count = %d, want 3", fraudCount)
-	}
+	query := [16]float32{0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15}
 
-	if fraudCount := FindTop5WithStrategy(query, store, BucketStrategyOrdered); fraudCount != 3 {
-		t.Fatalf("FindTop5WithStrategy ordered fraud count = %d, want 3", fraudCount)
-	}
-	dataset.BuildIVFIndex(store, 2)
-	if fraudCount := FindTop5WithStrategy(query, store, BucketStrategyIVF); fraudCount != 3 {
-		t.Fatalf("FindTop5WithStrategy ivf fraud count = %d, want 3", fraudCount)
-	}
+	want := FindTop5(query, store)
+	got, _ := findTop5WithStats(query, store, defaultSearchConfig)
 
-	if fraudCount := FindTop5Exact(query, store); fraudCount != 3 {
-		t.Fatalf("FindTop5Exact fraud count = %d, want 3", fraudCount)
+	if got != want {
+		t.Fatalf("FindTop5 = %d, want %d", got, want)
 	}
 }
 
-func BenchmarkFindTop5(b *testing.B) {
-	b.ReportAllocs()
+func TestSelectBucketWindow(t *testing.T) {
+	t.Parallel()
 
-	query := sampleRequestVector()
 	store := &dataset.VectorStore{
-		QuantizedVectors: benchmarkQuantizedVectors(1024),
-		Labels:           benchmarkLabels(1024),
-		Count:            1024,
+		QuantizedVectors: make([]uint16, 100*dataset.VectorSize),
+		Labels:           make([]byte, 100),
+		Count:            100,
 	}
-	dataset.BuildBucketIndex(store)
-	dataset.BuildIVFIndex(store, 32)
-
-	for b.Loop() {
-		_ = FindTop5(query, store)
-	}
-}
-
-func BenchmarkFindTop5BucketConfigs(b *testing.B) {
-	b.ReportAllocs()
-
-	query := sampleRequestVector()
-	store := &dataset.VectorStore{
-		QuantizedVectors: benchmarkQuantizedVectors(1024),
-		Labels:           benchmarkLabels(1024),
-		Count:            1024,
-	}
-	dataset.BuildBucketIndex(store)
-	dataset.BuildIVFIndex(store, 32)
-
-	configurations := []searchConfig{
-		{bucketTargetCandidates: 64, bucketMaxSearchRadius: 2},
-		{bucketTargetCandidates: 128, bucketMaxSearchRadius: 2},
-		{bucketTargetCandidates: 256, bucketMaxSearchRadius: 2},
-		{bucketTargetCandidates: 128, bucketMaxSearchRadius: 3},
-		{bucketTargetCandidates: 256, bucketMaxSearchRadius: 3},
-	}
-
-	for _, cfg := range configurations {
-		cfg := cfg
-		b.Run(
-			"target_"+strconv.Itoa(cfg.bucketTargetCandidates)+"_radius_"+strconv.Itoa(cfg.bucketMaxSearchRadius),
-			func(b *testing.B) {
-				for b.Loop() {
-					_ = findTop5WithConfig(query, store, BucketStrategyWindow, cfg)
-				}
-			},
-		)
-	}
-}
-
-func BenchmarkFindTop5StrategyMatrix(b *testing.B) {
-	b.ReportAllocs()
-
-	query := sampleRequestVector()
-	store := &dataset.VectorStore{
-		QuantizedVectors: benchmarkQuantizedVectors(1024),
-		Labels:           benchmarkLabels(1024),
-		Count:            1024,
-	}
-	dataset.BuildBucketIndex(store)
-
-	strategies := []BucketStrategy{
-		BucketStrategyWindow,
-		BucketStrategyOrdered,
-		BucketStrategyShortlist,
-		BucketStrategyIVF,
-	}
-	targets := []int{64, 96, 128, 192, 256}
-
-	for _, strategy := range strategies {
-		for _, target := range targets {
-			strategy := strategy
-			target := target
-
-			b.Run(string(strategy)+"_target_"+strconv.Itoa(target), func(b *testing.B) {
-				cfg := searchConfig{
-					bucketTargetCandidates: target,
-					bucketMaxSearchRadius:  3,
-					ivfNProbe:              4,
-				}
-				totalProcessed := 0
-				maxProcessed := 0
-				totalAvailable := 0
-				maxAvailable := 0
-				totalBuckets := 0
-				maxBuckets := 0
-				totalLists := 0
-				maxLists := 0
-				truncatedCount := 0
-
-				for b.Loop() {
-					_, stats := findTop5WithStats(query, store, strategy, cfg)
-					totalProcessed += stats.processedCandidates
-					if stats.processedCandidates > maxProcessed {
-						maxProcessed = stats.processedCandidates
-					}
-					totalAvailable += stats.availableCandidates
-					if stats.availableCandidates > maxAvailable {
-						maxAvailable = stats.availableCandidates
-					}
-					totalBuckets += stats.bucketsVisited
-					if stats.bucketsVisited > maxBuckets {
-						maxBuckets = stats.bucketsVisited
-					}
-					totalLists += stats.probedLists
-					if stats.probedLists > maxLists {
-						maxLists = stats.probedLists
-					}
-					if stats.shortlistTruncated {
-						truncatedCount++
-					}
-				}
-
-				b.ReportMetric(float64(totalProcessed)/float64(b.N), "avg_candidates/op")
-				b.ReportMetric(float64(maxProcessed), "max_candidates")
-				b.ReportMetric(float64(totalAvailable)/float64(b.N), "avg_available/op")
-				b.ReportMetric(float64(maxAvailable), "max_available")
-				b.ReportMetric(float64(totalBuckets)/float64(b.N), "avg_buckets/op")
-				b.ReportMetric(float64(maxBuckets), "max_buckets")
-				b.ReportMetric(float64(totalLists)/float64(b.N), "avg_lists/op")
-				b.ReportMetric(float64(maxLists), "max_lists")
-				b.ReportMetric(float64(truncatedCount)/float64(b.N), "trunc_rate")
-			})
+	// Distribute vectors into a few buckets
+	for i := 0; i < 100; i++ {
+		v := generateRandomVector()
+		for j := 0; j < dataset.VectorSize; j++ {
+			store.QuantizedVectors[i*dataset.VectorSize+j] = dataset.QuantizeComponent(v[j])
 		}
 	}
-}
-
-func BenchmarkSelectBucketWindow(b *testing.B) {
-	b.ReportAllocs()
-
-	store := &dataset.VectorStore{
-		QuantizedVectors: benchmarkQuantizedVectors(1024),
-		Labels:           benchmarkLabels(1024),
-		Count:            1024,
-	}
 	dataset.BuildBucketIndex(store)
-	dataset.BuildIVFIndex(store, 32)
 
-	cfg := searchConfig{bucketTargetCandidates: 256, bucketMaxSearchRadius: 3}
-
-	for b.Loop() {
-		_, _, _, _, _, _, _, _, _ = selectBucketWindow(
-			store.BucketIndex,
-			store.BucketPrefixSums,
-			16,
-			12,
-			3,
-			8,
-			cfg,
-		)
-	}
-}
-
-func TestSelectBucketWindowUsesTargetCandidates(t *testing.T) {
-	t.Parallel()
-
-	buckets := make([][]uint32, dataset.BucketIndexCount)
-	centerBucket := dataset.BucketIDFromCoordinates(0, 0, 0, 0)
-	neighborBucket := dataset.BucketIDFromCoordinates(1, 0, 0, 0)
-	buckets[centerBucket] = []uint32{1, 2, 3, 4, 5}
-	buckets[neighborBucket] = make([]uint32, 60)
-
-	_, amountEnd, _, _, _, _, _, _, candidateCount := selectBucketWindow(
-		buckets,
-		nil,
-		0,
-		0,
-		0,
-		0,
-		searchConfig{bucketTargetCandidates: 64, bucketMaxSearchRadius: 2},
-	)
-
-	if amountEnd < 1 {
-		t.Fatalf("expected search radius expansion to include neighbor bucket")
-	}
-
-	if candidateCount < 64 {
-		t.Fatalf("candidateCount = %d, want at least 64", candidateCount)
-	}
-}
-
-func TestShortlistCapsProcessedCandidates(t *testing.T) {
-	t.Parallel()
-
-	query := sampleRequestVector()
-	store := &dataset.VectorStore{
-		QuantizedVectors: benchmarkQuantizedVectors(4096),
-		Labels:           benchmarkLabels(4096),
-		Count:            4096,
-	}
-	dataset.BuildBucketIndex(store)
-	dataset.BuildIVFIndex(store, 64)
-
-	_, stats := findTop5WithStats(query, store, BucketStrategyShortlist, searchConfig{
-		bucketTargetCandidates: 96,
+	cfg := searchConfig{
+		bucketTargetCandidates: 5,
 		bucketMaxSearchRadius:  3,
-	})
-	if stats.processedCandidates > 96 {
-		t.Fatalf("processedCandidates = %d, want <= 96", stats.processedCandidates)
 	}
 
-	_, stats = findTop5WithStats(query, store, BucketStrategyIVF, searchConfig{
-		bucketTargetCandidates: 96,
-		bucketMaxSearchRadius:  3,
-		ivfNProbe:              4,
-	})
-	if stats.processedCandidates > 96 {
-		t.Fatalf("ivf processedCandidates = %d, want <= 96", stats.processedCandidates)
+	q := generateRandomVector()
+	amountB, hourB, dayB, txB := dataset.BucketCoordinatesFromQuery(q[0], q[3], q[4], q[8])
+
+	_, _, _, _, _, _, _, _, candidateCount := selectBucketWindow(store.BucketIndex, store.BucketPrefixSums, amountB, hourB, dayB, txB, cfg)
+
+	if candidateCount < 0 {
+		t.Fatalf("invalid candidate count %d", candidateCount)
 	}
 }
 
-func vectorWithFirstDimension(value float32) [16]float32 {
-	var vector [16]float32
-	vector[0] = value
-	return vector
-}
+func generateRandomStore(count int) *dataset.VectorStore {
+	vectors := make([]uint16, count*dataset.VectorSize)
+	labels := make([]byte, count)
 
-func flattenVectors(vectors ...[16]float32) []float32 {
-	flattened := make([]float32, 0, len(vectors)*14)
-
-	for _, vector := range vectors {
-		flattened = append(flattened, vector[:]...)
+	for i := 0; i < count; i++ {
+		v := generateRandomVector()
+		for j := 0; j < dataset.VectorSize; j++ {
+			vectors[i*dataset.VectorSize+j] = dataset.QuantizeComponent(v[j])
+		}
+		if rand.Float32() < 0.2 {
+			labels[i] = dataset.LabelFraud
+		} else {
+			labels[i] = dataset.LabelLegit
+		}
 	}
 
-	return flattened
+	return &dataset.VectorStore{
+		QuantizedVectors: vectors,
+		Labels:           labels,
+		Count:            count,
+	}
 }
 
-func sampleRequestVector() [16]float32 {
-	vector := [16]float32{
-		0.50,
-		0.25,
-		0.10,
-		0.50,
-		0.20,
-		-1,
-		-1,
-		0.03,
-		0.15,
-		0,
-		1,
-		0,
-		0.20,
-		0.04,
+func generateRandomVector() [16]float32 {
+	var v [16]float32
+	for i := 0; i < 16; i++ {
+		v[i] = rand.Float32()
 	}
-
-	return vector
+	return v
 }

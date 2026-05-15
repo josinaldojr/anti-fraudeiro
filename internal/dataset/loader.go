@@ -423,11 +423,7 @@ func loadMappedQuantizedVectorStore(path string, header binaryHeader) (*VectorSt
 		BucketMeta:       bucketMeta,
 		mappedData:       mappedData,
 	}
-	if header.Version < 5 {
-		BuildBucketIndex(store)
-	} else {
-		store.BucketPrefixSums = buildBucketPrefixSumsFromMeta(bucketMeta)
-	}
+	BuildBucketIndex(store)
 	return store, nil
 }
 

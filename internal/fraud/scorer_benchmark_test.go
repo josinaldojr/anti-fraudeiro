@@ -117,7 +117,8 @@ func BenchmarkFindTop5RealDataset(b *testing.B) {
 	}
 	defer store.Close()
 
-	query := sampleRequestVector()
+	vectorizer := newTestVectorizer()
+	query, _ := vectorizer.Vectorize(sampleRequest())
 	b.ResetTimer()
 
 	for b.Loop() {
@@ -135,7 +136,7 @@ func parseTimestampWithTimeParse(value string) (Timestamp, error) {
 }
 
 func benchmarkVectors(count int) []float32 {
-	values := make([]float32, 0, count*14)
+	values := make([]float32, 0, count*16)
 
 	for i := 0; i < count; i++ {
 		base := float32(i%100) / 100

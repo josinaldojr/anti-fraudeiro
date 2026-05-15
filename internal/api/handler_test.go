@@ -73,18 +73,20 @@ func newTestScorer() *fraud.Scorer {
 	})
 
 	store := &dataset.VectorStore{
-		Vectors: repeatVector(5, [16]float32{0.03, 0.2, 0.05, 0.8, 0.0, -1, -1, 0.02, 0.15, 0, 1, 0, 0.2, 0.03}),
-		Labels:  []byte{dataset.LabelLegit, dataset.LabelLegit, dataset.LabelLegit, dataset.LabelFraud, dataset.LabelLegit},
-		Count:   5,
+		QuantizedVectors: repeatQuantizedVector(5, [16]float32{0.03, 0.2, 0.05, 0.8, 0.0, -1, -1, 0.02, 0.15, 0, 1, 0, 0.2, 0.03}),
+		Labels:           []byte{dataset.LabelLegit, dataset.LabelLegit, dataset.LabelLegit, dataset.LabelFraud, dataset.LabelLegit},
+		Count:            5,
 	}
 
 	return fraud.NewScorer(vectorizer, store)
 }
 
-func repeatVector(count int, vector [16]float32) []float32 {
-	values := make([]float32, 0, count*dataset.VectorSize)
+func repeatQuantizedVector(count int, vector [16]float32) []uint16 {
+	values := make([]uint16, 0, count*dataset.VectorSize)
 	for i := 0; i < count; i++ {
-		values = append(values, vector[:]...)
+		for _, v := range vector {
+			values = append(values, dataset.QuantizeComponent(v))
+		}
 	}
 	return values
 }
