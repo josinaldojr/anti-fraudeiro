@@ -10,8 +10,8 @@ func TestBuildSecondaryBucketIndex(t *testing.T) {
 
 	store := &VectorStore{
 		QuantizedVectors: []uint16{
-			QuantizeComponent(0.10), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.20), QuantizeComponent(0.30), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.40), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.50), QuantizeComponent(0),
-			QuantizeComponent(0.15), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.25), QuantizeComponent(0.35), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.45), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.55), QuantizeComponent(0),
+			QuantizeComponent(0.10), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.20), QuantizeComponent(0.30), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.40), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.50), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0),
+			QuantizeComponent(0.15), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.25), QuantizeComponent(0.35), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.45), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.55), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0),
 		},
 		Labels: []byte{LabelLegit, LabelFraud},
 		Count:  2,
@@ -34,9 +34,9 @@ func TestCountBucketWindowCandidatesMatchesBucketLengths(t *testing.T) {
 
 	store := &VectorStore{
 		QuantizedVectors: []uint16{
-			QuantizeComponent(0.10), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.20), QuantizeComponent(0.30), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.40), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.50), QuantizeComponent(0),
-			QuantizeComponent(0.11), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.21), QuantizeComponent(0.31), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.41), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.51), QuantizeComponent(0),
-			QuantizeComponent(0.75), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.80), QuantizeComponent(0.20), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.60), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.10), QuantizeComponent(0),
+			QuantizeComponent(0.10), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.20), QuantizeComponent(0.30), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.40), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.50), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0),
+			QuantizeComponent(0.11), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.21), QuantizeComponent(0.31), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.41), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.51), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0),
+			QuantizeComponent(0.75), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.80), QuantizeComponent(0.20), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.60), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.10), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0),
 		},
 		Labels: []byte{LabelLegit, LabelFraud, LabelLegit},
 		Count:  3,
@@ -81,9 +81,9 @@ func TestBuildIVFIndex(t *testing.T) {
 
 	store := &VectorStore{
 		QuantizedVectors: []uint16{
-			QuantizeComponent(0.10), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.20), QuantizeComponent(0.30), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.40), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.50), QuantizeComponent(0),
-			QuantizeComponent(0.11), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.21), QuantizeComponent(0.31), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.41), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.51), QuantizeComponent(0),
-			QuantizeComponent(0.75), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.80), QuantizeComponent(0.20), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.60), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.10), QuantizeComponent(0),
+			QuantizeComponent(0.10), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.20), QuantizeComponent(0.30), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.40), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.50), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0),
+			QuantizeComponent(0.11), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.21), QuantizeComponent(0.31), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.41), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.51), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0),
+			QuantizeComponent(0.75), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.80), QuantizeComponent(0.20), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.60), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0.10), QuantizeComponent(0), QuantizeComponent(0), QuantizeComponent(0),
 		},
 		Labels: []byte{LabelLegit, LabelFraud, LabelLegit},
 		Count:  3,
@@ -112,8 +112,8 @@ func TestBuildIVFIndexUsesBucketContentSummary(t *testing.T) {
 
 	store := &VectorStore{
 		Vectors: []float32{
-			0.10, 0, 0.20, 0.25, 0.30, 0, 0, 0, 0.40, 0, 0, 0, 0.80, 0,
-			0.11, 0, 0.60, 0.26, 0.31, 0, 0, 0, 0.41, 0, 0, 0, 0.20, 0,
+			0.10, 0, 0.20, 0.25, 0.30, 0, 0, 0, 0.40, 0, 0, 0, 0.80, 0, 0, 0,
+			0.11, 0, 0.60, 0.26, 0.31, 0, 0, 0, 0.41, 0, 0, 0, 0.20, 0, 0, 0,
 		},
 		Labels: []byte{LabelLegit, LabelFraud},
 		Count:  2,
@@ -142,3 +142,5 @@ func TestBuildIVFIndexUsesBucketContentSummary(t *testing.T) {
 		}
 	}
 }
+
+

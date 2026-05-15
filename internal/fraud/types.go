@@ -8,7 +8,7 @@ import (
 )
 
 const topK = 5
-const knownMerchantSetThreshold = 16
+const knownMerchantSetThreshold = 64
 
 type FraudScoreRequest struct {
 	ID              string           `json:"id"`
@@ -17,6 +17,17 @@ type FraudScoreRequest struct {
 	Merchant        Merchant         `json:"merchant"`
 	Terminal        Terminal         `json:"terminal"`
 	LastTransaction *LastTransaction `json:"last_transaction"`
+}
+
+func (r *FraudScoreRequest) Reset() {
+	r.ID = ""
+	r.Transaction = Transaction{}
+	r.Customer.Reset()
+	r.Merchant = Merchant{}
+	r.Terminal = Terminal{}
+	if r.LastTransaction != nil {
+		*r.LastTransaction = LastTransaction{}
+	}
 }
 
 type Transaction struct {
@@ -30,6 +41,15 @@ type Customer struct {
 	TxCount24h       int      `json:"tx_count_24h"`
 	KnownMerchants   []string `json:"known_merchants"`
 	knownMerchantSet map[string]struct{}
+}
+
+func (c *Customer) Reset() {
+	c.AvgAmount = 0
+	c.TxCount24h = 0
+	c.KnownMerchants = c.KnownMerchants[:0]
+	for k := range c.knownMerchantSet {
+		delete(c.knownMerchantSet, k)
+	}
 }
 
 type Merchant struct {
@@ -56,6 +76,8 @@ type Decision struct {
 
 type Timestamp struct {
 	unixNano int64
+	hour     int8
+	weekday  int8
 }
 
 func (t *Timestamp) UnmarshalJSON(data []byte) error {
@@ -72,6 +94,14 @@ func (t Timestamp) Time() time.Time {
 	return time.Unix(0, t.unixNano).UTC()
 }
 
+func (t Timestamp) Hour() int {
+	return int(t.hour)
+}
+
+func (t Timestamp) Weekday() int {
+	return int(t.weekday)
+}
+
 func (t Timestamp) UnixNano() int64 {
 	return t.unixNano
 }
@@ -86,7 +116,11 @@ func ParseTimestamp(value string) (Timestamp, error) {
 		return Timestamp{}, fmt.Errorf("invalid RFC3339 timestamp %q: %w", value, err)
 	}
 
-	return Timestamp{unixNano: parsed.UTC().UnixNano()}, nil
+	return Timestamp{
+		unixNano: parsed.UTC().UnixNano(),
+		hour:     int8(parsed.Hour()),
+		weekday:  int8(weekdayIndex(parsed)),
+	}, nil
 }
 
 func (c *Customer) Finalize() {
@@ -213,7 +247,11 @@ func parseTimestampRFC3339UTCBytes(value []byte) (Timestamp, bool) {
 		return Timestamp{}, false
 	}
 
-	return Timestamp{unixNano: parsed.UnixNano()}, true
+	return Timestamp{
+		unixNano: parsed.UnixNano(),
+		hour:     int8(hour),
+		weekday:  int8(weekdayIndex(parsed)),
+	}, true
 }
 
 func parse2Digits(left byte, right byte) (int, bool) {

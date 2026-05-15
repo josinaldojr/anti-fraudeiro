@@ -1,6 +1,7 @@
 package fraud
 
 import (
+	"strconv"
 	"time"
 
 	"github.com/josinaldojr/anti-fraudeiro/internal/config"
@@ -8,7 +9,7 @@ import (
 
 type Vectorizer struct {
 	normalization           config.Normalization
-	mccRisk                 map[string]float32
+	mccRisk                 [10000]float32
 	maxAmountInv            float64
 	maxInstallmentsInv      float64
 	amountVsAvgRatioInv     float64
@@ -19,9 +20,20 @@ type Vectorizer struct {
 }
 
 func NewVectorizer(normalization config.Normalization, mccRisk map[string]float32) *Vectorizer {
+	var riskArr [10000]float32
+	for i := range riskArr {
+		riskArr[i] = 0.5
+	}
+	for mcc, risk := range mccRisk {
+		val, _ := strconv.Atoi(mcc)
+		if val >= 0 && val < 10000 {
+			riskArr[val] = risk
+		}
+	}
+
 	return &Vectorizer{
 		normalization:           normalization,
-		mccRisk:                 mccRisk,
+		mccRisk:                 riskArr,
 		maxAmountInv:            inverseOrOne(normalization.MaxAmount),
 		maxInstallmentsInv:      inverseOrOne(normalization.MaxInstallments),
 		amountVsAvgRatioInv:     inverseOrOne(normalization.AmountVsAvgRatio),
@@ -32,8 +44,8 @@ func NewVectorizer(normalization config.Normalization, mccRisk map[string]float3
 	}
 }
 
-func (v *Vectorizer) Vectorize(request FraudScoreRequest) ([14]float32, error) {
-	var vector [14]float32
+func (v *Vectorizer) Vectorize(request FraudScoreRequest) ([16]float32, error) {
+	var vector [16]float32
 
 	requestedAt := request.Transaction.RequestedAt.Time()
 
@@ -65,6 +77,8 @@ func (v *Vectorizer) Vectorize(request FraudScoreRequest) ([14]float32, error) {
 	vector[11] = boolToFloat32(!request.Customer.HasKnownMerchant(request.Merchant.ID))
 	vector[12] = v.lookupMCCRisk(request.Merchant.MCC)
 	vector[13] = clamp(request.Merchant.AvgAmount * v.maxMerchantAvgAmountInv)
+	vector[14] = 0 // Padding
+	vector[15] = 0 // Padding
 
 	return vector, nil
 }
@@ -117,9 +131,9 @@ func boolToFloat32(value bool) float32 {
 }
 
 func (v *Vectorizer) lookupMCCRisk(mcc string) float32 {
-	if risk, found := v.mccRisk[mcc]; found {
-		return risk
+	val, err := strconv.Atoi(mcc)
+	if err != nil || val < 0 || val >= 10000 {
+		return 0.5
 	}
-
-	return 0.5
+	return v.mccRisk[val]
 }

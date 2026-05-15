@@ -260,13 +260,13 @@ func TestShortlistCapsProcessedCandidates(t *testing.T) {
 	}
 }
 
-func vectorWithFirstDimension(value float32) [14]float32 {
-	var vector [14]float32
+func vectorWithFirstDimension(value float32) [16]float32 {
+	var vector [16]float32
 	vector[0] = value
 	return vector
 }
 
-func flattenVectors(vectors ...[14]float32) []float32 {
+func flattenVectors(vectors ...[16]float32) []float32 {
 	flattened := make([]float32, 0, len(vectors)*14)
 
 	for _, vector := range vectors {
@@ -276,8 +276,8 @@ func flattenVectors(vectors ...[14]float32) []float32 {
 	return flattened
 }
 
-func sampleRequestVector() [14]float32 {
-	vector := [14]float32{
+func sampleRequestVector() [16]float32 {
+	vector := [16]float32{
 		0.50,
 		0.25,
 		0.10,

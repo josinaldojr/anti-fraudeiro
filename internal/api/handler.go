@@ -46,6 +46,7 @@ func (h *Handler) FraudScore(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid request payload"})
 		return
 	}
+	defer releaseFraudScoreRequest(request)
 
 	if err := h.limiter.Acquire(r.Context()); err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, ErrorResponse{Error: "request canceled"})
@@ -53,7 +54,7 @@ func (h *Handler) FraudScore(w http.ResponseWriter, r *http.Request) {
 	}
 	defer h.limiter.Release()
 
-	fraudCount, err := h.scorer.ScoreFraudCount(request)
+	fraudCount, err := h.scorer.ScoreFraudCount(*request)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: err.Error()})
 		return

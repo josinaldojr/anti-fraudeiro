@@ -64,8 +64,8 @@ func TestBinaryVectorStoreRoundTrip(t *testing.T) {
 
 	expected := &VectorStore{
 		Vectors: []float32{
-			0, 0, 0, 0, 0, -1, -1, 0, 0, 0, 0, 0, 0.5, 0,
-			1, 1, 1, 1, 1, -1, -1, 1, 1, 1, 1, 1, 0.2, 1,
+			0, 0, 0, 0, 0, -1, -1, 0, 0, 0, 0, 0, 0.5, 0, 0, 0,
+			1, 1, 1, 1, 1, -1, -1, 1, 1, 1, 1, 1, 0.2, 1, 0, 0,
 		},
 		Labels: []byte{LabelFraud, LabelLegit},
 		Count:  2,
@@ -136,3 +136,4 @@ func TestConvertJSONToBinary(t *testing.T) {
 		t.Fatalf("len(store.QuantizedVectors) = %d, want %d", got, 2*VectorSize)
 	}
 }
+

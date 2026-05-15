@@ -73,7 +73,7 @@ func newTestScorer() *fraud.Scorer {
 	})
 
 	store := &dataset.VectorStore{
-		Vectors: repeatVector(5, [14]float32{0.03, 0.2, 0.05, 0.8, 0.0, -1, -1, 0.02, 0.15, 0, 1, 0, 0.2, 0.03}),
+		Vectors: repeatVector(5, [16]float32{0.03, 0.2, 0.05, 0.8, 0.0, -1, -1, 0.02, 0.15, 0, 1, 0, 0.2, 0.03}),
 		Labels:  []byte{dataset.LabelLegit, dataset.LabelLegit, dataset.LabelLegit, dataset.LabelFraud, dataset.LabelLegit},
 		Count:   5,
 	}
@@ -81,8 +81,8 @@ func newTestScorer() *fraud.Scorer {
 	return fraud.NewScorer(vectorizer, store)
 }
 
-func repeatVector(count int, vector [14]float32) []float32 {
-	values := make([]float32, 0, count*14)
+func repeatVector(count int, vector [16]float32) []float32 {
+	values := make([]float32, 0, count*dataset.VectorSize)
 	for i := 0; i < count; i++ {
 		values = append(values, vector[:]...)
 	}

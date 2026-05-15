@@ -1,12 +1,13 @@
 package dataset
 
 const (
-	VectorSize                = 14
+	VectorSize                = 16
 	LabelLegit                = byte(0)
 	LabelFraud                = byte(1)
 	BinaryFormatVersionV2     = uint32(2)
 	BinaryFormatVersionV3     = uint32(3)
-	BinaryFormatVersion       = uint32(4)
+	BinaryFormatVersionV4     = uint32(4)
+	BinaryFormatVersion       = uint32(5)
 	BinaryReferenceFile       = "references.bin"
 	CompressedReferenceFile   = "references.json.gz"
 	ExampleReferenceFile      = "example-references.json"
@@ -29,11 +30,17 @@ type ReferenceRecord struct {
 	Label  string    `json:"label"`
 }
 
+type BucketMetadata struct {
+	Offset uint32
+	Count  uint32
+}
+
 type VectorStore struct {
 	Vectors              []float32
 	QuantizedVectors     []uint16
 	Labels               []byte
 	Count                int
+	BucketMeta           []BucketMetadata
 	BucketIndex          [][]uint32
 	BucketPrefixSums     []uint32
 	SecondaryBucketIndex [][]uint32
@@ -53,6 +60,7 @@ func (store *VectorStore) Close() error {
 	store.Vectors = nil
 	store.QuantizedVectors = nil
 	store.Labels = nil
+	store.BucketMeta = nil
 	store.BucketIndex = nil
 	store.BucketPrefixSums = nil
 	store.SecondaryBucketIndex = nil

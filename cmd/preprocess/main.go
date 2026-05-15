@@ -22,16 +22,25 @@ func main() {
 		}
 		defer store.Close()
 
+		dataset.ReorderStoreByBucket(store)
+
 		if err := dataset.SaveBinaryVectorStore(*outputPath, store); err != nil {
 			log.Fatal(err)
 		}
 		count = store.Count
 	default:
-		var err error
-		count, err = dataset.ConvertJSONToBinary(*inputPath, *outputPath)
+		store, err := dataset.LoadVectorStore(*inputPath)
 		if err != nil {
 			log.Fatal(err)
 		}
+		defer store.Close()
+
+		dataset.ReorderStoreByBucket(store)
+
+		if err := dataset.SaveBinaryVectorStore(*outputPath, store); err != nil {
+			log.Fatal(err)
+		}
+		count = store.Count
 	}
 
 	log.Printf("wrote %d reference vectors to %s", count, *outputPath)

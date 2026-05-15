@@ -37,11 +37,12 @@ func LoadVectorStore(path string) (*VectorStore, error) {
 			return nil, fmt.Errorf("decode record %d: %w", recordIndex, err)
 		}
 
-		if len(record.Vector) != VectorSize {
-			return nil, fmt.Errorf("record %d has %d dimensions, expected %d", recordIndex, len(record.Vector), VectorSize)
+		if len(record.Vector) != 14 {
+			return nil, fmt.Errorf("record %d has %d dimensions, expected 14", recordIndex, len(record.Vector))
 		}
 
 		vectors = append(vectors, record.Vector...)
+		vectors = append(vectors, 0, 0) // Pad 14 to 16 dimensions
 
 		label, err := parseLabel(record.Label)
 		if err != nil {
@@ -167,31 +168,40 @@ func SaveBinaryVectorStore(path string, store *VectorStore) error {
 		return fmt.Errorf("write binary header: %w", err)
 	}
 
+	if header.Version >= 5 {
+		meta := store.BucketMeta
+		if len(meta) == 0 {
+			meta = make([]BucketMetadata, BucketIndexCount)
+		}
+		if err := binary.Write(writer, binary.LittleEndian, meta); err != nil {
+			return fmt.Errorf("write bucket meta: %w", err)
+		}
+	}
+
 	if _, err := writer.Write(store.Labels); err != nil {
 		return fmt.Errorf("write binary labels: %w", err)
 	}
 
-	if store.Count%2 != 0 {
+	if (len(store.Labels)+len(store.BucketMeta)*binary.Size(BucketMetadata{}))%2 != 0 {
 		if err := writer.WriteByte(0); err != nil {
 			return fmt.Errorf("write binary padding: %w", err)
 		}
 	}
 
-	for recordIndex := 0; recordIndex < store.Count; recordIndex++ {
-		offset := recordIndex * VectorSize
-		var quantizedVector []uint16
-		if len(store.QuantizedVectors) == 0 {
+	if len(store.QuantizedVectors) > 0 {
+		if err := binary.Write(writer, binary.LittleEndian, store.QuantizedVectors); err != nil {
+			return fmt.Errorf("write quantized vectors: %w", err)
+		}
+	} else {
+		for recordIndex := 0; recordIndex < store.Count; recordIndex++ {
+			offset := recordIndex * VectorSize
 			var quantizedBuffer [VectorSize]uint16
 			for index, value := range store.Vectors[offset : offset+VectorSize] {
 				quantizedBuffer[index] = QuantizeComponent(value)
 			}
-			quantizedVector = quantizedBuffer[:]
-		} else {
-			quantizedVector = store.QuantizedVectors[offset : offset+VectorSize]
-		}
-
-		if err := binary.Write(writer, binary.LittleEndian, quantizedVector); err != nil {
-			return fmt.Errorf("write quantized vector %d: %w", recordIndex, err)
+			if err := binary.Write(writer, binary.LittleEndian, quantizedBuffer); err != nil {
+				return fmt.Errorf("write quantized vector %d: %w", recordIndex, err)
+			}
 		}
 	}
 
@@ -203,101 +213,19 @@ func SaveBinaryVectorStore(path string, store *VectorStore) error {
 }
 
 func ConvertJSONToBinary(inputPath string, outputPath string) (int, error) {
-	decoder, closeDecoder, err := openDatasetDecoder(inputPath)
+	store, err := LoadVectorStore(inputPath)
 	if err != nil {
 		return 0, err
 	}
-	defer closeDecoder()
+	defer store.Close()
 
-	if err := expectJSONArrayStart(decoder); err != nil {
+	ReorderStoreByBucket(store)
+
+	if err := SaveBinaryVectorStore(outputPath, store); err != nil {
 		return 0, err
 	}
 
-	vectorTempFile, err := os.CreateTemp(filepath.Dir(outputPath), "references-vectors-*.bin")
-	if err != nil {
-		return 0, fmt.Errorf("create temporary vectors file: %w", err)
-	}
-	defer func() {
-		_ = vectorTempFile.Close()
-		_ = os.Remove(vectorTempFile.Name())
-	}()
-
-	vectorWriter := bufio.NewWriter(vectorTempFile)
-	labels := make([]byte, 0, 1<<20)
-	recordIndex := 0
-
-	for decoder.More() {
-		var record ReferenceRecord
-		if err := decoder.Decode(&record); err != nil {
-			return 0, fmt.Errorf("decode record %d: %w", recordIndex, err)
-		}
-
-		label, vector, err := binaryRecordFromReference(record)
-		if err != nil {
-			return 0, fmt.Errorf("record %d %w", recordIndex, err)
-		}
-
-		labels = append(labels, label)
-
-		var quantizedVector [VectorSize]uint16
-		for index, value := range vector {
-			quantizedVector[index] = QuantizeComponent(value)
-		}
-
-		if err := binary.Write(vectorWriter, binary.LittleEndian, quantizedVector); err != nil {
-			return 0, fmt.Errorf("write quantized vector: %w", err)
-		}
-
-		recordIndex++
-	}
-
-	if err := expectJSONArrayEnd(decoder); err != nil {
-		return 0, err
-	}
-
-	if err := vectorWriter.Flush(); err != nil {
-		return 0, fmt.Errorf("flush temporary vectors file: %w", err)
-	}
-
-	if _, err := vectorTempFile.Seek(0, io.SeekStart); err != nil {
-		return 0, fmt.Errorf("seek temporary vectors file: %w", err)
-	}
-
-	file, err := os.Create(outputPath)
-	if err != nil {
-		return 0, fmt.Errorf("create binary references file: %w", err)
-	}
-	defer file.Close()
-
-	writer := bufio.NewWriter(file)
-	if err := binary.Write(writer, binary.LittleEndian, binaryHeader{
-		Magic:      binaryMagic,
-		Version:    BinaryFormatVersion,
-		VectorSize: VectorSize,
-		Count:      uint64(recordIndex),
-	}); err != nil {
-		return 0, fmt.Errorf("write binary header: %w", err)
-	}
-
-	if _, err := writer.Write(labels); err != nil {
-		return 0, fmt.Errorf("write binary labels: %w", err)
-	}
-
-	if len(labels)%2 != 0 {
-		if err := writer.WriteByte(0); err != nil {
-			return 0, fmt.Errorf("write binary padding: %w", err)
-		}
-	}
-
-	if _, err := io.Copy(writer, vectorTempFile); err != nil {
-		return 0, fmt.Errorf("write binary vectors: %w", err)
-	}
-
-	if err := writer.Flush(); err != nil {
-		return 0, fmt.Errorf("flush binary references file: %w", err)
-	}
-
-	return recordIndex, nil
+	return store.Count, nil
 }
 
 func openDatasetReader(file *os.File, path string) (io.Reader, func() error, error) {
@@ -404,8 +332,8 @@ func parseLabel(value string) (byte, error) {
 }
 
 func binaryRecordFromReference(record ReferenceRecord) (byte, [VectorSize]float32, error) {
-	if len(record.Vector) != VectorSize {
-		return 0, [VectorSize]float32{}, fmt.Errorf("has %d dimensions, expected %d", len(record.Vector), VectorSize)
+	if len(record.Vector) != 14 {
+		return 0, [VectorSize]float32{}, fmt.Errorf("has %d dimensions, expected 14", len(record.Vector))
 	}
 
 	label, err := parseLabel(record.Label)
@@ -414,7 +342,9 @@ func binaryRecordFromReference(record ReferenceRecord) (byte, [VectorSize]float3
 	}
 
 	var vector [VectorSize]float32
-	copy(vector[:], record.Vector)
+	copy(vector[:14], record.Vector)
+	vector[14] = 0 // Padding
+	vector[15] = 0 // Padding
 	return label, vector, nil
 }
 
@@ -460,6 +390,16 @@ func loadMappedQuantizedVectorStore(path string, header binaryHeader) (*VectorSt
 
 	count := int(header.Count)
 	labelsOffset := binary.Size(binaryHeader{})
+	var bucketMeta []BucketMetadata
+
+	if header.Version >= 5 {
+		metaCount := BucketIndexCount
+		metaSize := metaCount * binary.Size(BucketMetadata{})
+		metaBytes := mappedData[labelsOffset : labelsOffset+metaSize]
+		bucketMeta = unsafe.Slice((*BucketMetadata)(unsafe.Pointer(&metaBytes[0])), metaCount)
+		labelsOffset += metaSize
+	}
+
 	vectorsOffset := labelsOffset + count
 	if vectorsOffset%2 != 0 {
 		vectorsOffset++
@@ -480,10 +420,81 @@ func loadMappedQuantizedVectorStore(path string, header binaryHeader) (*VectorSt
 		QuantizedVectors: quantizedVectors,
 		Labels:           labels,
 		Count:            count,
+		BucketMeta:       bucketMeta,
 		mappedData:       mappedData,
 	}
-	BuildBucketIndex(store)
+	if header.Version < 5 {
+		BuildBucketIndex(store)
+	} else {
+		store.BucketPrefixSums = buildBucketPrefixSumsFromMeta(bucketMeta)
+	}
 	return store, nil
+}
+
+func buildBucketPrefixSumsFromMeta(meta []BucketMetadata) []uint32 {
+	prefixAmountBucketCount := AmountBucketCount + 1
+	prefixHourBucketCount := HourBucketCount + 1
+	prefixDayBucketCount := DayBucketCount + 1
+	prefixTx24hBucketCount := Tx24hBucketCount + 1
+
+	prefixSums := make([]uint32, prefixAmountBucketCount*prefixHourBucketCount*prefixDayBucketCount*prefixTx24hBucketCount)
+
+	for amountIndex := 0; amountIndex < AmountBucketCount; amountIndex++ {
+		for hourIndex := 0; hourIndex < HourBucketCount; hourIndex++ {
+			for dayIndex := 0; dayIndex < DayBucketCount; dayIndex++ {
+				for txIndex := 0; txIndex < Tx24hBucketCount; txIndex++ {
+					bucketID := (((amountIndex*HourBucketCount)+hourIndex)*DayBucketCount+dayIndex)*Tx24hBucketCount + txIndex
+					prefixSums[prefixIndex(amountIndex+1, hourIndex+1, dayIndex+1, txIndex+1)] = meta[bucketID].Count
+				}
+			}
+		}
+	}
+
+	for amountIndex := 1; amountIndex <= AmountBucketCount; amountIndex++ {
+		for hourIndex := 1; hourIndex <= HourBucketCount; hourIndex++ {
+			for dayIndex := 1; dayIndex <= DayBucketCount; dayIndex++ {
+				for txIndex := 1; txIndex <= Tx24hBucketCount; txIndex++ {
+					index := prefixIndex(amountIndex, hourIndex, dayIndex, txIndex)
+					prefixSums[index] += prefixSums[prefixIndex(amountIndex-1, hourIndex, dayIndex, txIndex)]
+				}
+			}
+		}
+	}
+
+	for amountIndex := 0; amountIndex <= AmountBucketCount; amountIndex++ {
+		for hourIndex := 1; hourIndex <= HourBucketCount; hourIndex++ {
+			for dayIndex := 1; dayIndex <= DayBucketCount; dayIndex++ {
+				for txIndex := 1; txIndex <= Tx24hBucketCount; txIndex++ {
+					index := prefixIndex(amountIndex, hourIndex, dayIndex, txIndex)
+					prefixSums[index] += prefixSums[prefixIndex(amountIndex, hourIndex-1, dayIndex, txIndex)]
+				}
+			}
+		}
+	}
+
+	for amountIndex := 0; amountIndex <= AmountBucketCount; amountIndex++ {
+		for hourIndex := 0; hourIndex <= HourBucketCount; hourIndex++ {
+			for dayIndex := 1; dayIndex <= DayBucketCount; dayIndex++ {
+				for txIndex := 1; txIndex <= Tx24hBucketCount; txIndex++ {
+					index := prefixIndex(amountIndex, hourIndex, dayIndex, txIndex)
+					prefixSums[index] += prefixSums[prefixIndex(amountIndex, hourIndex, dayIndex-1, txIndex)]
+				}
+			}
+		}
+	}
+
+	for amountIndex := 0; amountIndex <= AmountBucketCount; amountIndex++ {
+		for hourIndex := 0; hourIndex <= HourBucketCount; hourIndex++ {
+			for dayIndex := 0; dayIndex <= DayBucketCount; dayIndex++ {
+				for txIndex := 1; txIndex <= Tx24hBucketCount; txIndex++ {
+					index := prefixIndex(amountIndex, hourIndex, dayIndex, txIndex)
+					prefixSums[index] += prefixSums[prefixIndex(amountIndex, hourIndex, dayIndex, txIndex-1)]
+				}
+			}
+		}
+	}
+
+	return prefixSums
 }
 
 func bytesAsUint16(data []byte) []uint16 {

@@ -55,7 +55,7 @@ func Load() Config {
 		NormalizationPath:          envOrDefault("NORMALIZATION_PATH", filepath.Join(resourceDir, "normalization.json")),
 		GOMAXPROCS:                 envIntOrDefault("GOMAXPROCS", 0),
 		GCPercent:                  envIntOrDefault("GC_PERCENT", 100),
-		MemoryLimitMiB:             envInt64OrDefault("MEMORY_LIMIT_MIB", 0),
+		MemoryLimitMiB:             envInt64OrDefault("MEMORY_LIMIT_MIB", 150),
 		MaxConcurrentFraudRequests: envIntOrDefault("MAX_CONCURRENT_FRAUD_REQUESTS", 0),
 		BucketStrategy:             envOrDefault("BUCKET_STRATEGY", "window"),
 		BucketTargetCandidates:     envIntOrDefault("BUCKET_TARGET_CANDIDATES", 256),

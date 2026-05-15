@@ -97,6 +97,52 @@ func BuildSecondaryBucketIndex(store *VectorStore) {
 	store.SecondaryBucketIndex = buckets
 }
 
+func ReorderStoreByBucket(store *VectorStore) {
+	if store == nil || store.Count == 0 {
+		return
+	}
+
+	if len(store.BucketIndex) == 0 {
+		BuildBucketIndex(store)
+	}
+
+	reorderedLabels := make([]byte, store.Count)
+	reorderedQuantized := make([]uint16, store.Count*VectorSize)
+	bucketMeta := make([]BucketMetadata, BucketIndexCount)
+
+	currentOffset := uint32(0)
+	for bucketID, recordIndices := range store.BucketIndex {
+		count := uint32(len(recordIndices))
+		bucketMeta[bucketID] = BucketMetadata{
+			Offset: currentOffset,
+			Count:  count,
+		}
+
+		for _, recordIndex := range recordIndices {
+			reorderedLabels[currentOffset] = store.Labels[recordIndex]
+
+			dstOffset := int(currentOffset) * VectorSize
+			if len(store.QuantizedVectors) > 0 {
+				srcOffset := int(recordIndex) * VectorSize
+				copy(reorderedQuantized[dstOffset:dstOffset+VectorSize], store.QuantizedVectors[srcOffset:srcOffset+VectorSize])
+			} else {
+				srcOffset := int(recordIndex) * VectorSize
+				for i := 0; i < VectorSize; i++ {
+					reorderedQuantized[dstOffset+i] = QuantizeComponent(store.Vectors[srcOffset+i])
+				}
+			}
+
+			currentOffset++
+		}
+	}
+
+	store.Labels = reorderedLabels
+	store.QuantizedVectors = reorderedQuantized
+	store.Vectors = nil      // We are moving to quantized only in binary
+	store.BucketMeta = bucketMeta
+	store.BucketIndex = nil // No longer needed
+}
+
 func BucketIDFromQuery(amount float32, hour float32, day float32, tx24h float32) int {
 	amountBucket, hourBucket, dayBucket, tx24hBucket := BucketCoordinatesFromQuery(amount, hour, day, tx24h)
 

@@ -1,7 +1,6 @@
 services:
   nginx:
-    image: nginx:1.29-alpine
-    platform: linux/amd64
+    image: nginx:1.27-alpine
     depends_on:
       - api1
       - api2
@@ -24,12 +23,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    platform: linux/amd64
+    ports:
+      - "8081:8080"
     environment:
       PORT: "8080"
       GOMAXPROCS: "${GOMAXPROCS:-1}"
       GC_PERCENT: "${GC_PERCENT:-500}"
-      MEMORY_LIMIT_MIB: "${MEMORY_LIMIT_MIB:-0}"
+      MEMORY_LIMIT_MIB: "${MEMORY_LIMIT_MIB:-150}"
       MAX_CONCURRENT_FRAUD_REQUESTS: "${MAX_CONCURRENT_FRAUD_REQUESTS:-0}"
       BUCKET_STRATEGY: "${BUCKET_STRATEGY:-window}"
       BUCKET_TARGET_CANDIDATES: "${BUCKET_TARGET_CANDIDATES:-256}"
@@ -52,12 +52,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    platform: linux/amd64
+    ports:
+      - "8082:8080"
     environment:
       PORT: "8080"
       GOMAXPROCS: "${GOMAXPROCS:-1}"
       GC_PERCENT: "${GC_PERCENT:-500}"
-      MEMORY_LIMIT_MIB: "${MEMORY_LIMIT_MIB:-0}"
+      MEMORY_LIMIT_MIB: "${MEMORY_LIMIT_MIB:-150}"
       MAX_CONCURRENT_FRAUD_REQUESTS: "${MAX_CONCURRENT_FRAUD_REQUESTS:-0}"
       BUCKET_STRATEGY: "${BUCKET_STRATEGY:-window}"
       BUCKET_TARGET_CANDIDATES: "${BUCKET_TARGET_CANDIDATES:-256}"

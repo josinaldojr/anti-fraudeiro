@@ -48,22 +48,40 @@ func run() error {
 		dataset.BuildIVFIndex(store, cfg.IVFListCount)
 	}
 
+	// Warm-up mmap data to avoid page faults during the test
+	warmupDataset(store)
+
 	vectorizer := fraud.NewVectorizer(normalization, mccRisk)
 	fraud.SetDefaultSearchConfig(cfg.BucketTargetCandidates, cfg.BucketMaxSearchRadius)
 	fraud.SetDefaultIVFNProbe(cfg.IVFNProbe)
 	scorer := fraud.NewScorer(vectorizer, store, bucketStrategy)
 	handler := api.NewHandler(scorer, cfg.MaxConcurrentFraudRequests)
 
+	// Prime the pools
+	api.WarmupPools()
+
 	server := &http.Server{
 		Addr:              cfg.ListenAddr(),
 		Handler:           api.NewRouter(handler),
-		ReadHeaderTimeout: 5 * time.Second,
-		IdleTimeout:       30 * time.Second,
+		ReadHeaderTimeout: 2 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	logDatasetStartup(cfg, store, bucketStrategy)
 
 	return server.ListenAndServe()
+}
+
+func warmupDataset(store *dataset.VectorStore) {
+	// Touch all labels and some vectors to trigger page-in
+	sum := 0
+	for i := 0; i < store.Count; i++ {
+		sum += int(store.Labels[i])
+		if i%1000 == 0 && len(store.QuantizedVectors) > 0 {
+			sum += int(store.QuantizedVectors[i*dataset.VectorSize])
+		}
+	}
+	_ = sum
 }
 
 func applyRuntimeTuning(cfg config.Config) {

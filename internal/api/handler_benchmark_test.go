@@ -8,18 +8,22 @@ import (
 )
 
 func BenchmarkDecodeFraudScoreRequest(b *testing.B) {
-	b.ReportAllocs()
-
 	body := validFraudScoreRequestJSON()
+	b.ReportAllocs()
+	b.ResetTimer()
 
-	for b.Loop() {
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
 		request := httptest.NewRequest(http.MethodPost, "/fraud-score", strings.NewReader(body))
 		request.Header.Set("Content-Type", "application/json")
 		recorder := httptest.NewRecorder()
+		b.StartTimer()
 
-		if _, err := decodeFraudScoreRequest(recorder, request); err != nil {
+		req, err := decodeFraudScoreRequest(recorder, request)
+		if err != nil {
 			b.Fatalf("decodeFraudScoreRequest returned error: %v", err)
 		}
+		releaseFraudScoreRequest(req)
 	}
 }
 

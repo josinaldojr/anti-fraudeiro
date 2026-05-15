@@ -139,7 +139,7 @@ func benchmarkVectors(count int) []float32 {
 
 	for i := 0; i < count; i++ {
 		base := float32(i%100) / 100
-		vector := [14]float32{
+		vector := [16]float32{
 			base,
 			0.25,
 			0.10,
