@@ -4,6 +4,6 @@
     "https://github.com/josinaldojr"
   ],
   "source-code-repo": "https://github.com/josinaldojr/anti-fraudeiro",
-  "stack": ["go", "nginx"],
+  "stack": ["go", "haproxy"],
   "open_to_work": true
 }
