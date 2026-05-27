@@ -137,8 +137,11 @@ func TestDecisionThreshold(t *testing.T) {
 		expectedScore float64
 		expectedPass  bool
 	}{
+		{name: "score_0_0", fraudCount: 0, expectedScore: 0.0, expectedPass: true},
+		{name: "score_0_2", fraudCount: 1, expectedScore: 0.2, expectedPass: true},
 		{name: "score_0_4", fraudCount: 2, expectedScore: 0.4, expectedPass: true},
 		{name: "score_0_6", fraudCount: 3, expectedScore: 0.6, expectedPass: false},
+		{name: "score_0_8", fraudCount: 4, expectedScore: 0.8, expectedPass: false},
 		{name: "score_1_0", fraudCount: 5, expectedScore: 1.0, expectedPass: false},
 	}
 

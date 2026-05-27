@@ -36,7 +36,7 @@ func decisionFromFraudCount(fraudCount int) Decision {
 	fraudScore := float64(fraudCount) / float64(topK)
 
 	return Decision{
-		Approved:   fraudScore < 0.6,
+		Approved:   fraudCount < 3,
 		FraudScore: fraudScore,
 	}
 }

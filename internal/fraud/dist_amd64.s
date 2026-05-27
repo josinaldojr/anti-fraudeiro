@@ -63,3 +63,47 @@ loop:
 done:
     VZEROUPPER
     RET
+
+// func hasAVX2() bool
+TEXT ·hasAVX2(SB), NOSPLIT, $0
+    // Check max CPUID level
+    MOVL $0, AX
+    CPUID
+    CMPL AX, $7
+    JL no_avx2
+
+    // Check OSXSAVE and AVX support first in EAX=1
+    MOVL $1, AX
+    CPUID
+    // ECX bit 27 = OSXSAVE, bit 28 = AVX
+    // Mask: (1 << 27) | (1 << 28) = 0x18000000
+    ANDL $0x18000000, CX
+    CMPL CX, $0x18000000
+    JNE no_avx2
+
+    // Check if OS enabled YMM/XMM saving
+    MOVL $0, CX
+    BYTE $0x0f; BYTE $0x01; BYTE $0xd0 // XGETBV instruction (since older go assemblers might not recognize XGETBV literally)
+    // EAX bit 1 = XMM, bit 2 = YMM
+    // Mask: 6
+    ANDL $6, AX
+    CMPL AX, $6
+    JNE no_avx2
+
+    // Check AVX2 in CPUID EAX=7, ECX=0
+    MOVL $7, AX
+    MOVL $0, CX
+    CPUID
+    // EBX bit 5 = AVX2 (1 << 5 = 32)
+    ANDL $32, BX
+    CMPL BX, $32
+    JE has_avx2
+
+no_avx2:
+    MOVB $0, ret+0(FP)
+    RET
+
+has_avx2:
+    MOVB $1, ret+0(FP)
+    RET
+

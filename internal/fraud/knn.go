@@ -2,6 +2,7 @@ package fraud
 
 import (
 	"sync"
+	"unsafe"
 
 	"github.com/josinaldojr/anti-fraudeiro/internal/dataset"
 )
@@ -11,8 +12,9 @@ const (
 )
 
 type searchConfig struct {
-	bucketTargetCandidates int
-	bucketMaxSearchRadius  int
+	bucketTargetCandidates    int
+	bucketMaxSearchRadius     int
+	bucketEarlyExitCandidates int
 }
 
 type searchStats struct {
@@ -32,13 +34,15 @@ var knnScratchPool = sync.Pool{
 }
 
 var defaultSearchConfig = searchConfig{
-	bucketTargetCandidates: 128,
-	bucketMaxSearchRadius:  2,
+	bucketTargetCandidates:    128,
+	bucketMaxSearchRadius:     2,
+	bucketEarlyExitCandidates: 128,
 }
 
 func SetDefaultSearchConfig(bucketTargetCandidates int, bucketMaxSearchRadius int) {
 	if bucketTargetCandidates > 0 {
 		defaultSearchConfig.bucketTargetCandidates = bucketTargetCandidates
+		defaultSearchConfig.bucketEarlyExitCandidates = bucketTargetCandidates * 3 / 4
 	}
 	if bucketMaxSearchRadius >= 0 && bucketMaxSearchRadius <= 3 {
 		defaultSearchConfig.bucketMaxSearchRadius = bucketMaxSearchRadius
@@ -46,13 +50,70 @@ func SetDefaultSearchConfig(bucketTargetCandidates int, bucketMaxSearchRadius in
 }
 
 func FindTop5(query [16]float32, store *dataset.VectorStore) (fraudCount int) {
-	fraudCount, _ = findTop5WithStats(query, store, defaultSearchConfig)
+	// Layer 1: Fast Approximate Search
+	var bestDistances [topK]uint64
+	var stats searchStats
+	fraudCount, bestDistances, stats = findTop5WithStats(query, store, defaultSearchConfig)
+	_ = stats
+
+	// If the approximate count is borderline (1, 2, 3, or 4),
+	// or if we have low confidence in the neighbors (5th distance is large or incomplete),
+	// run the Linear Exact Scan over all reference vectors to guarantee 100% decision alignment.
+	if (fraudCount > 0 && fraudCount < 5) || bestDistances[topK-1] > 300000000 {
+		return exactScan(query, store)
+	}
+
 	return fraudCount
 }
 
-func findTop5WithStats(query [16]float32, store *dataset.VectorStore, cfg searchConfig) (fraudCount int, stats searchStats) {
+func exactScan(query [16]float32, store *dataset.VectorStore) int {
+	var exactBestDistances [topK]uint64
+	var exactBestLabels [topK]byte
+	for i := range exactBestDistances {
+		exactBestDistances[i] = ^uint64(0)
+	}
+
+	q0 := int32(dataset.QuantizeComponent(query[0]))
+	q1 := int32(dataset.QuantizeComponent(query[1]))
+	q2 := int32(dataset.QuantizeComponent(query[2]))
+	q3 := int32(dataset.QuantizeComponent(query[3]))
+	q4 := int32(dataset.QuantizeComponent(query[4]))
+	q5 := int32(dataset.QuantizeComponent(query[5]))
+	q6 := int32(dataset.QuantizeComponent(query[6]))
+	q7 := int32(dataset.QuantizeComponent(query[7]))
+	q8 := int32(dataset.QuantizeComponent(query[8]))
+	q9 := int32(dataset.QuantizeComponent(query[9]))
+	q10 := int32(dataset.QuantizeComponent(query[10]))
+	q11 := int32(dataset.QuantizeComponent(query[11]))
+	q12 := int32(dataset.QuantizeComponent(query[12]))
+	q13 := int32(dataset.QuantizeComponent(query[13]))
+	q14 := int32(dataset.QuantizeComponent(query[14]))
+	q15 := int32(dataset.QuantizeComponent(query[15]))
+
+	scanQuantizedContiguous(
+		store.QuantizedVectors,
+		store.Labels,
+		q0, q1, q2, q3, q4, q5, q6, q7, q8, q9, q10, q11, q12, q13, q14, q15,
+		&exactBestDistances,
+		&exactBestLabels,
+	)
+
+	exactFraudCount := 0
+	for _, label := range exactBestLabels {
+		if label == dataset.LabelFraud {
+			exactFraudCount++
+		}
+	}
+	return exactFraudCount
+}
+
+func findTop5WithStats(query [16]float32, store *dataset.VectorStore, cfg searchConfig) (fraudCount int, bestDistances [topK]uint64, stats searchStats) {
 	if store == nil || store.Count == 0 {
-		return 0, searchStats{}
+		var emptyDists [topK]uint64
+		for i := range emptyDists {
+			emptyDists[i] = ^uint64(0)
+		}
+		return 0, emptyDists, searchStats{}
 	}
 
 	q0 := int32(dataset.QuantizeComponent(query[0]))
@@ -75,7 +136,6 @@ func findTop5WithStats(query [16]float32, store *dataset.VectorStore, cfg search
 	vectors := store.QuantizedVectors
 	labels := store.Labels
 
-	var bestDistances [topK]uint64
 	var bestLabels [topK]byte
 
 	for index := range bestDistances {
@@ -154,7 +214,7 @@ func findTop5WithStats(query [16]float32, store *dataset.VectorStore, cfg search
 		}
 	}
 
-	return fraudCount, stats
+	return fraudCount, bestDistances, stats
 }
 
 func insertTopKUint64(distance uint64, label byte, bestDistances *[topK]uint64, bestLabels *[topK]byte) {
@@ -209,38 +269,60 @@ func scanQuantizedCandidates(
 	threshold := bestDistances[topK-1]
 	for _, vectorIndex := range candidateIDs {
 		baseOffset := int(vectorIndex) * dataset.VectorSize
-		v := vectors[baseOffset : baseOffset+dataset.VectorSize]
+		ptr := (*[16]uint16)(unsafe.Pointer(&vectors[baseOffset]))
 
-		d0 := q0 - int32(v[0])
-		d1 := q1 - int32(v[1])
-		d2 := q2 - int32(v[2])
-		d3 := q3 - int32(v[3])
-		d4 := q4 - int32(v[4])
-		d5 := q5 - int32(v[5])
-		d6 := q6 - int32(v[6])
-		d7 := q7 - int32(v[7])
-		d8 := q8 - int32(v[8])
-		d9 := q9 - int32(v[9])
-		d10 := q10 - int32(v[10])
-		d11 := q11 - int32(v[11])
-		d12 := q12 - int32(v[12])
-		d13 := q13 - int32(v[13])
-		d14 := q14 - int32(v[14])
-		d15 := q15 - int32(v[15])
+		// Stage 1: Dimensions 0-3
+		d0 := q0 - int32(ptr[0])
+		d1 := q1 - int32(ptr[1])
+		d2 := q2 - int32(ptr[2])
+		d3 := q3 - int32(ptr[3])
 
 		dist := uint64(int64(d0)*int64(d0)) +
 			uint64(int64(d1)*int64(d1)) +
 			uint64(int64(d2)*int64(d2)) +
-			uint64(int64(d3)*int64(d3)) +
-			uint64(int64(d4)*int64(d4)) +
+			uint64(int64(d3)*int64(d3))
+
+		if dist >= threshold {
+			continue
+		}
+
+		// Stage 2: Dimensions 4-7
+		d4 := q4 - int32(ptr[4])
+		d5 := q5 - int32(ptr[5])
+		d6 := q6 - int32(ptr[6])
+		d7 := q7 - int32(ptr[7])
+
+		dist += uint64(int64(d4)*int64(d4)) +
 			uint64(int64(d5)*int64(d5)) +
 			uint64(int64(d6)*int64(d6)) +
-			uint64(int64(d7)*int64(d7)) +
-			uint64(int64(d8)*int64(d8)) +
+			uint64(int64(d7)*int64(d7))
+
+		if dist >= threshold {
+			continue
+		}
+
+		// Stage 3: Dimensions 8-11
+		d8 := q8 - int32(ptr[8])
+		d9 := q9 - int32(ptr[9])
+		d10 := q10 - int32(ptr[10])
+		d11 := q11 - int32(ptr[11])
+
+		dist += uint64(int64(d8)*int64(d8)) +
 			uint64(int64(d9)*int64(d9)) +
 			uint64(int64(d10)*int64(d10)) +
-			uint64(int64(d11)*int64(d11)) +
-			uint64(int64(d12)*int64(d12)) +
+			uint64(int64(d11)*int64(d11))
+
+		if dist >= threshold {
+			continue
+		}
+
+		// Stage 4: Dimensions 12-15
+		d12 := q12 - int32(ptr[12])
+		d13 := q13 - int32(ptr[13])
+		d14 := q14 - int32(ptr[14])
+		d15 := q15 - int32(ptr[15])
+
+		dist += uint64(int64(d12)*int64(d12)) +
 			uint64(int64(d13)*int64(d13)) +
 			uint64(int64(d14)*int64(d14)) +
 			uint64(int64(d15)*int64(d15))
@@ -300,7 +382,11 @@ func selectBucketWindow(
 			candidateCount = 0
 		}
 
-		if candidateCount >= cfg.bucketTargetCandidates {
+		earlyExit := cfg.bucketEarlyExitCandidates
+		if earlyExit <= 0 {
+			earlyExit = 128
+		}
+		if candidateCount >= cfg.bucketTargetCandidates || (radius >= 2 && candidateCount >= earlyExit) {
 			return amountStart, amountEnd, hourStart, hourEnd, dayStart, dayEnd, txStart, txEnd, candidateCount
 		}
 	}
@@ -325,3 +411,87 @@ func bucketRangeEnd(center int, bucketCount int, radius int) int {
 
 	return end
 }
+
+func scanQuantizedContiguous(
+	vectors []uint16,
+	labels []byte,
+	q0, q1, q2, q3, q4, q5, q6, q7, q8, q9, q10, q11, q12, q13, q14, q15 int32,
+	bestDistances *[topK]uint64,
+	bestLabels *[topK]byte,
+) int {
+	count := len(labels)
+	if count == 0 {
+		return 0
+	}
+
+	threshold := bestDistances[topK-1]
+
+	for i := 0; i < count; i++ {
+		baseOffset := i * dataset.VectorSize
+		ptr := (*[16]uint16)(unsafe.Pointer(&vectors[baseOffset]))
+
+		// Stage 1: Dimensions 0-3
+		d0 := q0 - int32(ptr[0])
+		d1 := q1 - int32(ptr[1])
+		d2 := q2 - int32(ptr[2])
+		d3 := q3 - int32(ptr[3])
+
+		dist := uint64(int64(d0)*int64(d0)) +
+			uint64(int64(d1)*int64(d1)) +
+			uint64(int64(d2)*int64(d2)) +
+			uint64(int64(d3)*int64(d3))
+
+		if dist >= threshold {
+			continue
+		}
+
+		// Stage 2: Dimensions 4-7
+		d4 := q4 - int32(ptr[4])
+		d5 := q5 - int32(ptr[5])
+		d6 := q6 - int32(ptr[6])
+		d7 := q7 - int32(ptr[7])
+
+		dist += uint64(int64(d4)*int64(d4)) +
+			uint64(int64(d5)*int64(d5)) +
+			uint64(int64(d6)*int64(d6)) +
+			uint64(int64(d7)*int64(d7))
+
+		if dist >= threshold {
+			continue
+		}
+
+		// Stage 3: Dimensions 8-11
+		d8 := q8 - int32(ptr[8])
+		d9 := q9 - int32(ptr[9])
+		d10 := q10 - int32(ptr[10])
+		d11 := q11 - int32(ptr[11])
+
+		dist += uint64(int64(d8)*int64(d8)) +
+			uint64(int64(d9)*int64(d9)) +
+			uint64(int64(d10)*int64(d10)) +
+			uint64(int64(d11)*int64(d11))
+
+		if dist >= threshold {
+			continue
+		}
+
+		// Stage 4: Dimensions 12-15
+		d12 := q12 - int32(ptr[12])
+		d13 := q13 - int32(ptr[13])
+		d14 := q14 - int32(ptr[14])
+		d15 := q15 - int32(ptr[15])
+
+		dist += uint64(int64(d12)*int64(d12)) +
+			uint64(int64(d13)*int64(d13)) +
+			uint64(int64(d14)*int64(d14)) +
+			uint64(int64(d15)*int64(d15))
+
+		if dist < threshold {
+			insertTopKUint64(dist, labels[i], bestDistances, bestLabels)
+			threshold = bestDistances[topK-1]
+		}
+	}
+
+	return count
+}
+

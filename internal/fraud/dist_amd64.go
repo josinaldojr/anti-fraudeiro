@@ -8,3 +8,7 @@ package fraud
 // distances: N uint64 values.
 //go:noescape
 func DistancesAVX2(query *[16]int32, vectors []uint16, distances []uint64)
+
+//go:noescape
+func hasAVX2() bool
+
