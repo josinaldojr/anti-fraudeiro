@@ -1,26 +1,38 @@
 package dataset
 
 const (
-	VectorSize                = 16
-	LabelLegit                = byte(0)
-	LabelFraud                = byte(1)
-	BinaryFormatVersionV2     = uint32(2)
-	BinaryFormatVersionV3     = uint32(3)
-	BinaryFormatVersionV4     = uint32(4)
-	BinaryFormatVersion       = uint32(5)
-	BinaryReferenceFile       = "references.bin"
-	CompressedReferenceFile   = "references.json.gz"
-	ExampleReferenceFile      = "example-references.json"
-	AmountBucketCount         = 32
-	HourBucketCount           = 24
-	DayBucketCount            = 7
-	Tx24hBucketCount          = 16
-	RiskBucketCount           = 8
-	BucketIndexCount          = AmountBucketCount * HourBucketCount * DayBucketCount * Tx24hBucketCount
-	quantizedMinValue         = float32(-1)
-	quantizedMaxValue         = float32(1)
-	quantizedOffset           = float32(32767.5)
-	quantizedScale            = float32(32767.5)
+	VectorSize              = 16
+	LabelLegit              = byte(0)
+	LabelFraud              = byte(1)
+	BinaryFormatVersionV2   = uint32(2)
+	BinaryFormatVersionV3   = uint32(3)
+	BinaryFormatVersionV4   = uint32(4)
+	BinaryFormatVersionV5   = uint32(5)
+	BinaryFormatVersion     = uint32(6)
+	BinaryReferenceFile     = "references.bin"
+	CompressedReferenceFile = "references.json.gz"
+	ExampleReferenceFile    = "example-references.json"
+
+	// 6D cell index dimensions (replaces old 4D amount/hour/day/tx24h).
+	AmountBucketCount      = 12
+	MinutesSinceLastCount  = 8
+	KMFromHomeCount        = 8
+	Tx24hBucketCount       = 8
+	MCCRiskBucketCount     = 8
+	AmountVsAvgBucketCount = 8
+	BucketIndexCount       = AmountBucketCount * MinutesSinceLastCount * KMFromHomeCount * Tx24hBucketCount * MCCRiskBucketCount * AmountVsAvgBucketCount
+
+	// Legacy 4D counts preserved for v5 binary compatibility.
+	OldAmountBucketCount = 32
+	OldHourBucketCount   = 24
+	OldDayBucketCount    = 7
+	OldTx24hBucketCount  = 16
+	OldBucketIndexCount  = OldAmountBucketCount * OldHourBucketCount * OldDayBucketCount * OldTx24hBucketCount
+
+	quantizedMinValue = float32(-1)
+	quantizedMaxValue = float32(1)
+	quantizedOffset   = float32(32767.5)
+	quantizedScale    = float32(32767.5)
 )
 
 type ReferenceRecord struct {
@@ -29,6 +41,12 @@ type ReferenceRecord struct {
 }
 
 type BucketMetadata struct {
+	Offset     uint32
+	Count      uint16
+	FraudCount uint16
+}
+
+type BucketMetadataV5 struct {
 	Offset uint32
 	Count  uint32
 }

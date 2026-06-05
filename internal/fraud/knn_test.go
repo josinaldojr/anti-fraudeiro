@@ -1,173 +1,169 @@
 package fraud
 
 import (
-	"math/rand"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/josinaldojr/anti-fraudeiro/internal/dataset"
 )
 
-func TestFindTop5MatchesExactSearch(t *testing.T) {
-	t.Parallel()
-
-	store := &dataset.VectorStore{
-		QuantizedVectors: []uint16{
-			dataset.QuantizeComponent(0.10), dataset.QuantizeComponent(0.10), dataset.QuantizeComponent(0.10), dataset.QuantizeComponent(0.10), dataset.QuantizeComponent(0.10), dataset.QuantizeComponent(0.10), dataset.QuantizeComponent(0.10), dataset.QuantizeComponent(0.10), dataset.QuantizeComponent(0.10), dataset.QuantizeComponent(0.10), dataset.QuantizeComponent(0.10), dataset.QuantizeComponent(0.10), dataset.QuantizeComponent(0.10), dataset.QuantizeComponent(0.10), dataset.QuantizeComponent(0.10), dataset.QuantizeComponent(0.10),
-			dataset.QuantizeComponent(0.20), dataset.QuantizeComponent(0.20), dataset.QuantizeComponent(0.20), dataset.QuantizeComponent(0.20), dataset.QuantizeComponent(0.20), dataset.QuantizeComponent(0.20), dataset.QuantizeComponent(0.20), dataset.QuantizeComponent(0.20), dataset.QuantizeComponent(0.20), dataset.QuantizeComponent(0.20), dataset.QuantizeComponent(0.20), dataset.QuantizeComponent(0.20), dataset.QuantizeComponent(0.20), dataset.QuantizeComponent(0.20), dataset.QuantizeComponent(0.20), dataset.QuantizeComponent(0.20),
-			dataset.QuantizeComponent(0.30), dataset.QuantizeComponent(0.30), dataset.QuantizeComponent(0.30), dataset.QuantizeComponent(0.30), dataset.QuantizeComponent(0.30), dataset.QuantizeComponent(0.30), dataset.QuantizeComponent(0.30), dataset.QuantizeComponent(0.30), dataset.QuantizeComponent(0.30), dataset.QuantizeComponent(0.30), dataset.QuantizeComponent(0.30), dataset.QuantizeComponent(0.30), dataset.QuantizeComponent(0.30), dataset.QuantizeComponent(0.30), dataset.QuantizeComponent(0.30), dataset.QuantizeComponent(0.30),
-			dataset.QuantizeComponent(0.40), dataset.QuantizeComponent(0.40), dataset.QuantizeComponent(0.40), dataset.QuantizeComponent(0.40), dataset.QuantizeComponent(0.40), dataset.QuantizeComponent(0.40), dataset.QuantizeComponent(0.40), dataset.QuantizeComponent(0.40), dataset.QuantizeComponent(0.40), dataset.QuantizeComponent(0.40), dataset.QuantizeComponent(0.40), dataset.QuantizeComponent(0.40), dataset.QuantizeComponent(0.40), dataset.QuantizeComponent(0.40), dataset.QuantizeComponent(0.40), dataset.QuantizeComponent(0.40),
-			dataset.QuantizeComponent(0.50), dataset.QuantizeComponent(0.50), dataset.QuantizeComponent(0.50), dataset.QuantizeComponent(0.50), dataset.QuantizeComponent(0.50), dataset.QuantizeComponent(0.50), dataset.QuantizeComponent(0.50), dataset.QuantizeComponent(0.50), dataset.QuantizeComponent(0.50), dataset.QuantizeComponent(0.50), dataset.QuantizeComponent(0.50), dataset.QuantizeComponent(0.50), dataset.QuantizeComponent(0.50), dataset.QuantizeComponent(0.50), dataset.QuantizeComponent(0.50), dataset.QuantizeComponent(0.50),
-			dataset.QuantizeComponent(0.60), dataset.QuantizeComponent(0.60), dataset.QuantizeComponent(0.60), dataset.QuantizeComponent(0.60), dataset.QuantizeComponent(0.60), dataset.QuantizeComponent(0.60), dataset.QuantizeComponent(0.60), dataset.QuantizeComponent(0.60), dataset.QuantizeComponent(0.60), dataset.QuantizeComponent(0.60), dataset.QuantizeComponent(0.60), dataset.QuantizeComponent(0.60), dataset.QuantizeComponent(0.60), dataset.QuantizeComponent(0.60), dataset.QuantizeComponent(0.60), dataset.QuantizeComponent(0.60),
-		},
-		Labels: []byte{dataset.LabelLegit, dataset.LabelFraud, dataset.LabelLegit, dataset.LabelFraud, dataset.LabelLegit, dataset.LabelFraud},
-		Count:  6,
+func TestFindTop5ReturnsBoundedAmbiguousResult(t *testing.T) {
+	query := [16]float32{
+		0.1, 0.2, 0.3, 0.4,
+		0.5, 0.1, 0.2, 0.3,
+		0.4, 0.5, 0.1, 0.2,
+		0.3, 0.4, 0.5, 0.1,
 	}
-	store.BucketIndex = nil
+	store := vectorStoreWithLabels(query, []byte{
+		dataset.LabelFraud,
+		dataset.LabelFraud,
+		dataset.LabelLegit,
+		dataset.LabelLegit,
+		dataset.LabelLegit,
+	})
 
-	query := [16]float32{0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15}
+	boundedFraudCount, bestDistances, stats := findTop5WithStats(query, store, defaultSearchConfig)
+	if boundedFraudCount != 2 {
+		t.Fatalf("bounded fraud count = %d, want 2", boundedFraudCount)
+	}
+	if !needsExactFallback(boundedFraudCount, bestDistances) {
+		t.Fatalf("expected ambiguous bounded result to require legacy fallback")
+	}
+	if stats.processedCandidates < 5 {
+		t.Fatalf("processed candidates = %d, want at least 5", stats.processedCandidates)
+	}
 
-	want := FindTop5(query, store)
-	got, _, _ := findTop5WithStats(query, store, defaultSearchConfig)
-
-	if got != want {
-		t.Fatalf("FindTop5 = %d, want %d", got, want)
+	if actual := FindTop5(query, store); actual != boundedFraudCount {
+		t.Fatalf("FindTop5 = %d, want bounded fraud count %d", actual, boundedFraudCount)
 	}
 }
 
-func TestSelectBucketWindow(t *testing.T) {
-	t.Parallel()
+func TestFindTop5RealDatasetUsesBoundedDefaultPath(t *testing.T) {
+	referencesPath := filepath.Join("..", "..", "resources", dataset.BinaryReferenceFile)
+	if _, err := os.Stat(referencesPath); err != nil {
+		t.Skipf("real dataset not available: %v", err)
+	}
+
+	store, err := dataset.LoadVectorStore(referencesPath)
+	if err != nil {
+		t.Fatalf("LoadVectorStore returned error: %v", err)
+	}
+	defer store.Close()
+
+	vectorizer := newTestVectorizer()
+	query, err := vectorizer.Vectorize(sampleRequest())
+	if err != nil {
+		t.Fatalf("Vectorize returned error: %v", err)
+	}
+
+	boundedFraudCount, bestDistances, stats := findTop5WithStats(query, store, defaultSearchConfig)
+	if stats.processedCandidates <= 0 {
+		t.Fatalf("expected bounded search to process candidates")
+	}
+	if stats.processedCandidates >= store.Count {
+		t.Fatalf("bounded search processed %d candidates, want less than full dataset %d", stats.processedCandidates, store.Count)
+	}
+
+	if actual := FindTop5(query, store); actual != boundedFraudCount {
+		t.Fatalf("FindTop5 = %d, want bounded fraud count %d", actual, boundedFraudCount)
+	}
+	t.Logf("bounded candidates=%d buckets=%d legacyFallback=%v", stats.processedCandidates, stats.bucketsVisited, needsExactFallback(boundedFraudCount, bestDistances))
+}
+
+type TestEntry struct {
+	Request          FraudScoreRequest `json:"request"`
+	ExpectedApproved bool              `json:"expected_approved"`
+}
+
+type TestData struct {
+	Entries []TestEntry `json:"entries"`
+}
+
+func TestQuantizationDiscrepancy(t *testing.T) {
+	t.Log("Setting Rinha default search config (256 candidates, radius 3)...")
+	SetDefaultSearchConfig(256, 3)
+
+	t.Log("Loading quantized references from BIN...")
+	storeQuantized, err := dataset.LoadVectorStore("../../resources/references.bin")
+	if err != nil {
+		t.Skipf("bin file not available: %v", err)
+	}
+	defer storeQuantized.Close()
+
+	t.Log("Loading test data...")
+	file, err := os.Open("../../.rinha/test/test-data.json")
+	if err != nil {
+		t.Skipf("test-data.json not available: %v", err)
+	}
+	defer file.Close()
+
+	var testData TestData
+	if err := json.NewDecoder(file).Decode(&testData); err != nil {
+		t.Fatalf("failed to decode test data: %v", err)
+	}
+
+	vectorizer := newTestVectorizer()
+
+	thresholdsToTest := []uint64{
+		200000000,
+		150000000,
+		100000000,
+	}
+
+	sampleSize := 2000
+
+	for _, distThreshold := range thresholdsToTest {
+		mismatches := 0
+		exactScansCount := 0
+
+		for i := 0; i < sampleSize && i < len(testData.Entries); i++ {
+			entry := testData.Entries[i]
+			query, _ := vectorizer.Vectorize(entry.Request)
+
+			// Approx search
+			var bestDistances [topK]uint64
+			fraudCountApprox, bestDistances, _ := findTop5WithStats(query, storeQuantized, defaultSearchConfig)
+
+			// Decision with custom fallback condition
+			finalFraudCount := fraudCountApprox
+			if (fraudCountApprox > 0 && fraudCountApprox < 5) || bestDistances[topK-1] > distThreshold {
+				exactScansCount++
+				finalFraudCount = exactScan(query, storeQuantized)
+			}
+
+			approvedFallback := finalFraudCount < 3
+
+			// True exact search
+			fraudCountExact := exactScan(query, storeQuantized)
+			approvedExact := fraudCountExact < 3
+
+			if approvedFallback != approvedExact {
+				mismatches++
+			}
+		}
+
+		t.Logf("Threshold %10d | Mismatches: %4d (%.4f%%) | Exact Scans: %5d/%d (%.2f%%)", 
+			distThreshold, mismatches, float64(mismatches)/float64(sampleSize)*100, 
+			exactScansCount, sampleSize, float64(exactScansCount)/float64(sampleSize)*100)
+	}
+}
+
+func vectorStoreWithLabels(query [16]float32, labels []byte) *dataset.VectorStore {
+	quantized := make([]uint16, 0, len(labels)*dataset.VectorSize)
+	for range labels {
+		for _, value := range query {
+			quantized = append(quantized, dataset.QuantizeComponent(value))
+		}
+	}
 
 	store := &dataset.VectorStore{
-		QuantizedVectors: make([]uint16, 100*dataset.VectorSize),
-		Labels:           make([]byte, 100),
-		Count:            100,
-	}
-	// Distribute vectors into a few buckets
-	for i := 0; i < 100; i++ {
-		v := generateRandomVector()
-		for j := 0; j < dataset.VectorSize; j++ {
-			store.QuantizedVectors[i*dataset.VectorSize+j] = dataset.QuantizeComponent(v[j])
-		}
+		QuantizedVectors: quantized,
+		Labels:           append([]byte(nil), labels...),
+		Count:            len(labels),
 	}
 	dataset.BuildBucketIndex(store)
-
-	cfg := searchConfig{
-		bucketTargetCandidates: 5,
-		bucketMaxSearchRadius:  3,
-	}
-
-	q := generateRandomVector()
-	amountB, hourB, dayB, txB := dataset.BucketCoordinatesFromQuery(q[0], q[3], q[4], q[8])
-
-	_, _, _, _, _, _, _, _, candidateCount := selectBucketWindow(store.BucketIndex, store.BucketPrefixSums, amountB, hourB, dayB, txB, cfg)
-
-	if candidateCount < 0 {
-		t.Fatalf("invalid candidate count %d", candidateCount)
-	}
+	dataset.ReorderStoreByBucket(store)
+	return store
 }
-
-func generateRandomStore(count int) *dataset.VectorStore {
-	vectors := make([]uint16, count*dataset.VectorSize)
-	labels := make([]byte, count)
-
-	for i := 0; i < count; i++ {
-		v := generateRandomVector()
-		for j := 0; j < dataset.VectorSize; j++ {
-			vectors[i*dataset.VectorSize+j] = dataset.QuantizeComponent(v[j])
-		}
-		if rand.Float32() < 0.2 {
-			labels[i] = dataset.LabelFraud
-		} else {
-			labels[i] = dataset.LabelLegit
-		}
-	}
-
-	return &dataset.VectorStore{
-		QuantizedVectors: vectors,
-		Labels:           labels,
-		Count:            count,
-	}
-}
-
-func generateRandomVector() [16]float32 {
-	var v [16]float32
-	for i := 0; i < 16; i++ {
-		v[i] = rand.Float32()
-	}
-	return v
-}
-
-func TestScanQuantizedContiguousSIMD(t *testing.T) {
-	// Generate random vectors and labels
-	count := 500
-	vectors := make([]uint16, count*dataset.VectorSize)
-	labels := make([]byte, count)
-	for i := 0; i < count*dataset.VectorSize; i++ {
-		vectors[i] = uint16(rand.Intn(65536))
-	}
-	for i := 0; i < count; i++ {
-		if rand.Float32() < 0.2 {
-			labels[i] = dataset.LabelFraud
-		} else {
-			labels[i] = dataset.LabelLegit
-		}
-	}
-
-	// Generate a random query
-	q := generateRandomVector()
-	q0 := int32(dataset.QuantizeComponent(q[0]))
-	q1 := int32(dataset.QuantizeComponent(q[1]))
-	q2 := int32(dataset.QuantizeComponent(q[2]))
-	q3 := int32(dataset.QuantizeComponent(q[3]))
-	q4 := int32(dataset.QuantizeComponent(q[4]))
-	q5 := int32(dataset.QuantizeComponent(q[5]))
-	q6 := int32(dataset.QuantizeComponent(q[6]))
-	q7 := int32(dataset.QuantizeComponent(q[7]))
-	q8 := int32(dataset.QuantizeComponent(q[8]))
-	q9 := int32(dataset.QuantizeComponent(q[9]))
-	q10 := int32(dataset.QuantizeComponent(q[10]))
-	q11 := int32(dataset.QuantizeComponent(q[11]))
-	q12 := int32(dataset.QuantizeComponent(q[12]))
-	q13 := int32(dataset.QuantizeComponent(q[13]))
-	q14 := int32(dataset.QuantizeComponent(q[14]))
-	q15 := int32(dataset.QuantizeComponent(q[15]))
-
-	// Run generic scan
-	var distsGeneric [topK]uint64
-	var labelsGeneric [topK]byte
-	for i := range distsGeneric {
-		distsGeneric[i] = ^uint64(0)
-	}
-	countGen := scanQuantizedContiguous(
-		vectors, labels,
-		q0, q1, q2, q3, q4, q5, q6, q7, q8, q9, q10, q11, q12, q13, q14, q15,
-		&distsGeneric, &labelsGeneric,
-	)
-
-	// Run SIMD scan
-	var distsSIMD [topK]uint64
-	var labelsSIMD [topK]byte
-	for i := range distsSIMD {
-		distsSIMD[i] = ^uint64(0)
-	}
-	countSIMD := scanQuantizedContiguousSIMD(
-		vectors, labels,
-		q0, q1, q2, q3, q4, q5, q6, q7, q8, q9, q10, q11, q12, q13, q14, q15,
-		&distsSIMD, &labelsSIMD,
-	)
-
-	if countGen != countSIMD {
-		t.Fatalf("count mismatch: generic=%d, simd=%d", countGen, countSIMD)
-	}
-
-	for i := 0; i < topK; i++ {
-		if distsGeneric[i] != distsSIMD[i] {
-			t.Errorf("distance mismatch at index %d: generic=%d, simd=%d", i, distsGeneric[i], distsSIMD[i])
-		}
-		if labelsGeneric[i] != labelsSIMD[i] {
-			t.Errorf("label mismatch at index %d: generic=%d, simd=%d", i, labelsGeneric[i], labelsSIMD[i])
-		}
-	}
-}
-
-

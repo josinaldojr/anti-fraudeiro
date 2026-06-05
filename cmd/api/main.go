@@ -64,12 +64,14 @@ func run() error {
 }
 
 func warmupDataset(store *dataset.VectorStore) {
-	// Touch all labels and some vectors to trigger page-in
+	// Touch the full mapped dataset so page faults do not leak into the load test.
 	sum := 0
 	for i := 0; i < store.Count; i++ {
 		sum += int(store.Labels[i])
-		if i%1000 == 0 && len(store.QuantizedVectors) > 0 {
-			sum += int(store.QuantizedVectors[i*dataset.VectorSize])
+	}
+	if len(store.QuantizedVectors) > 0 {
+		for i := 0; i < len(store.QuantizedVectors); i += dataset.VectorSize {
+			sum += int(store.QuantizedVectors[i])
 		}
 	}
 	_ = sum

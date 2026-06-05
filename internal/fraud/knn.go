@@ -8,7 +8,9 @@ import (
 )
 
 const (
-	maxWindowBuckets = 2401
+	maxWindowBuckets               = 4913 // 17^3 max (radius 2 across 3 dims, or ~radius 1 across 6D = 729)
+	exactFallbackDistanceThreshold = 300000000
+	maxExpandRadius                = 5 // covers all cells (11 of 12 amount buckets, all 8 of others)
 )
 
 type searchConfig struct {
@@ -19,7 +21,6 @@ type searchConfig struct {
 
 type searchStats struct {
 	processedCandidates int
-	windowCandidates    int
 	bucketsVisited      int
 }
 
@@ -34,39 +35,165 @@ var knnScratchPool = sync.Pool{
 }
 
 var defaultSearchConfig = searchConfig{
-	bucketTargetCandidates:    128,
-	bucketMaxSearchRadius:     2,
-	bucketEarlyExitCandidates: 128,
+	bucketTargetCandidates:    512,
+	bucketMaxSearchRadius:     3,
+	bucketEarlyExitCandidates: 256,
 }
 
 func SetDefaultSearchConfig(bucketTargetCandidates int, bucketMaxSearchRadius int) {
 	if bucketTargetCandidates > 0 {
 		defaultSearchConfig.bucketTargetCandidates = bucketTargetCandidates
-		defaultSearchConfig.bucketEarlyExitCandidates = bucketTargetCandidates * 3 / 4
+		defaultSearchConfig.bucketEarlyExitCandidates = bucketTargetCandidates / 2
 	}
-	if bucketMaxSearchRadius >= 0 && bucketMaxSearchRadius <= 3 {
+	if bucketMaxSearchRadius >= 0 && bucketMaxSearchRadius <= 5 {
 		defaultSearchConfig.bucketMaxSearchRadius = bucketMaxSearchRadius
 	}
 }
 
 func FindTop5(query [16]float32, store *dataset.VectorStore) (fraudCount int) {
-	// Layer 1: Fast Approximate Search
-	var bestDistances [topK]uint64
-	var stats searchStats
-	fraudCount, bestDistances, stats = findTop5WithStats(query, store, defaultSearchConfig)
+	fraudCount, _, stats := findTop5WithStats(query, store, defaultSearchConfig)
 	_ = stats
-
-	// If the approximate count is borderline (1, 2, 3, or 4),
-	// or if we have low confidence in the neighbors (5th distance is large or incomplete),
-	// run the Linear Exact Scan over all reference vectors to guarantee 100% decision alignment.
-	if (fraudCount > 0 && fraudCount < 5) || bestDistances[topK-1] > 300000000 {
-		return exactScan(query, store)
-	}
-
 	return fraudCount
 }
 
+func needsExactFallback(fraudCount int, bestDistances [topK]uint64) bool {
+	return fraudCount == 2 || bestDistances[topK-1] > exactFallbackDistanceThreshold
+}
+
 func exactScan(query [16]float32, store *dataset.VectorStore) int {
+	return exactScanSIMD(query, store)
+}
+
+func expandedScan(query [16]float32, store *dataset.VectorStore, bestDistances [topK]uint64) int {
+	if store == nil || store.Count == 0 || len(store.QuantizedVectors) == 0 || len(store.BucketMeta) == 0 {
+		return exactScanSIMD(query, store)
+	}
+
+	q0 := int32(dataset.QuantizeComponent(query[0]))
+	q1 := int32(dataset.QuantizeComponent(query[1]))
+	q2 := int32(dataset.QuantizeComponent(query[2]))
+	q3 := int32(dataset.QuantizeComponent(query[3]))
+	q4 := int32(dataset.QuantizeComponent(query[4]))
+	q5 := int32(dataset.QuantizeComponent(query[5]))
+	q6 := int32(dataset.QuantizeComponent(query[6]))
+	q7 := int32(dataset.QuantizeComponent(query[7]))
+	q8 := int32(dataset.QuantizeComponent(query[8]))
+	q9 := int32(dataset.QuantizeComponent(query[9]))
+	q10 := int32(dataset.QuantizeComponent(query[10]))
+	q11 := int32(dataset.QuantizeComponent(query[11]))
+	q12 := int32(dataset.QuantizeComponent(query[12]))
+	q13 := int32(dataset.QuantizeComponent(query[13]))
+	q14 := int32(dataset.QuantizeComponent(query[14]))
+	q15 := int32(dataset.QuantizeComponent(query[15]))
+
+	var bestLabels [topK]byte
+	vectors := store.QuantizedVectors
+	labels := store.Labels
+	meta := store.BucketMeta
+
+	amountBucket, minutesBucket, kmHomeBucket, txCountBucket, amountVsAvgBucket, mccRiskBucket :=
+		dataset.BucketCoordinatesFromQuery(
+			query[0], query[5], query[7], query[8], query[2], query[12],
+		)
+
+	for radius := defaultSearchConfig.bucketMaxSearchRadius + 1; radius <= maxExpandRadius; radius++ {
+		aStart := bucketRangeStart(amountBucket, dataset.AmountBucketCount, radius)
+		aEnd := bucketRangeEnd(amountBucket, dataset.AmountBucketCount, radius)
+		mStart := bucketRangeStart(minutesBucket, dataset.MinutesSinceLastCount, radius)
+		mEnd := bucketRangeEnd(minutesBucket, dataset.MinutesSinceLastCount, radius)
+		kStart := bucketRangeStart(kmHomeBucket, dataset.KMFromHomeCount, radius)
+		kEnd := bucketRangeEnd(kmHomeBucket, dataset.KMFromHomeCount, radius)
+		tStart := bucketRangeStart(txCountBucket, dataset.Tx24hBucketCount, radius)
+		tEnd := bucketRangeEnd(txCountBucket, dataset.Tx24hBucketCount, radius)
+		vStart := bucketRangeStart(amountVsAvgBucket, dataset.AmountVsAvgBucketCount, radius)
+		vEnd := bucketRangeEnd(amountVsAvgBucket, dataset.AmountVsAvgBucketCount, radius)
+		rStart := bucketRangeStart(mccRiskBucket, dataset.MCCRiskBucketCount, radius)
+		rEnd := bucketRangeEnd(mccRiskBucket, dataset.MCCRiskBucketCount, radius)
+
+		for ai := aStart; ai <= aEnd; ai++ {
+			for mi := mStart; mi <= mEnd; mi++ {
+				for ki := kStart; ki <= kEnd; ki++ {
+					for ti := tStart; ti <= tEnd; ti++ {
+						for vi := vStart; vi <= vEnd; vi++ {
+							for ri := rStart; ri <= rEnd; ri++ {
+								ad := ai - amountBucket
+								if ad < 0 {
+									ad = -ad
+								}
+								md := mi - minutesBucket
+								if md < 0 {
+									md = -md
+								}
+								kd := ki - kmHomeBucket
+								if kd < 0 {
+									kd = -kd
+								}
+								td := ti - txCountBucket
+								if td < 0 {
+									td = -td
+								}
+								vd := vi - amountVsAvgBucket
+								if vd < 0 {
+									vd = -vd
+								}
+								rd := ri - mccRiskBucket
+								if rd < 0 {
+									rd = -rd
+								}
+								maxDist := ad
+								if md > maxDist {
+									maxDist = md
+								}
+								if kd > maxDist {
+									maxDist = kd
+								}
+								if td > maxDist {
+									maxDist = td
+								}
+								if vd > maxDist {
+									maxDist = vd
+								}
+								if rd > maxDist {
+									maxDist = rd
+								}
+								if maxDist != radius {
+									continue
+								}
+
+								cellID := dataset.BucketIDFromCoordinates(ai, mi, ki, ti, vi, ri)
+								m := meta[cellID]
+								if m.Count == 0 {
+									continue
+								}
+
+								offset := int(m.Offset) * dataset.VectorSize
+								count := int(m.Count)
+
+								scanQuantizedContiguousSIMD(
+									vectors[offset:offset+count*dataset.VectorSize],
+									labels[m.Offset:m.Offset+uint32(m.Count)],
+									q0, q1, q2, q3, q4, q5, q6, q7, q8, q9, q10, q11, q12, q13, q14, q15,
+									&bestDistances,
+									&bestLabels,
+								)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	fraudCount := 0
+	for _, label := range bestLabels {
+		if label == dataset.LabelFraud {
+			fraudCount++
+		}
+	}
+	return fraudCount
+}
+
+func exactScanScalar(query [16]float32, store *dataset.VectorStore) int {
 	var exactBestDistances [topK]uint64
 	var exactBestLabels [topK]byte
 	for i := range exactBestDistances {
@@ -142,60 +269,110 @@ func findTop5WithStats(query [16]float32, store *dataset.VectorStore, cfg search
 		bestDistances[index] = ^uint64(0)
 	}
 
-	amountBucket, hourBucket, dayBucket, tx24hBucket := dataset.BucketCoordinatesFromQuery(
-		query[0],
-		query[3],
-		query[4],
-		query[8],
-	)
+	amountBucket, minutesBucket, kmHomeBucket, txCountBucket, amountVsAvgBucket, mccRiskBucket :=
+		dataset.BucketCoordinatesFromQuery(
+			query[0], query[5], query[7], query[8], query[2], query[12],
+		)
 
-	amountStart, amountEnd, hourStart, hourEnd, dayStart, dayEnd, txStart, txEnd, candidateCount :=
-		selectBucketWindow(store.BucketIndex, store.BucketPrefixSums, amountBucket, hourBucket, dayBucket, tx24hBucket, cfg)
-	stats.windowCandidates = candidateCount
+	if len(store.BucketMeta) == dataset.BucketIndexCount {
+		meta := store.BucketMeta
+		for radius := 0; radius <= cfg.bucketMaxSearchRadius; radius++ {
+			aStart := bucketRangeStart(amountBucket, dataset.AmountBucketCount, radius)
+			aEnd := bucketRangeEnd(amountBucket, dataset.AmountBucketCount, radius)
+			mStart := bucketRangeStart(minutesBucket, dataset.MinutesSinceLastCount, radius)
+			mEnd := bucketRangeEnd(minutesBucket, dataset.MinutesSinceLastCount, radius)
+			kStart := bucketRangeStart(kmHomeBucket, dataset.KMFromHomeCount, radius)
+			kEnd := bucketRangeEnd(kmHomeBucket, dataset.KMFromHomeCount, radius)
+			tStart := bucketRangeStart(txCountBucket, dataset.Tx24hBucketCount, radius)
+			tEnd := bucketRangeEnd(txCountBucket, dataset.Tx24hBucketCount, radius)
+			vStart := bucketRangeStart(amountVsAvgBucket, dataset.AmountVsAvgBucketCount, radius)
+			vEnd := bucketRangeEnd(amountVsAvgBucket, dataset.AmountVsAvgBucketCount, radius)
+			rStart := bucketRangeStart(mccRiskBucket, dataset.MCCRiskBucketCount, radius)
+			rEnd := bucketRangeEnd(mccRiskBucket, dataset.MCCRiskBucketCount, radius)
 
-	if len(store.BucketMeta) > 0 {
-		for amountIndex := amountStart; amountIndex <= amountEnd; amountIndex++ {
-			for hourIndex := hourStart; hourIndex <= hourEnd; hourIndex++ {
-				for dayIndex := dayStart; dayIndex <= dayEnd; dayIndex++ {
-					for txIndex := txStart; txIndex <= txEnd; txIndex++ {
-						bucketID := dataset.BucketIDFromCoordinates(amountIndex, hourIndex, dayIndex, txIndex)
-						meta := store.BucketMeta[bucketID]
-						if meta.Count == 0 {
-							continue
+			for ai := aStart; ai <= aEnd; ai++ {
+				for mi := mStart; mi <= mEnd; mi++ {
+					for ki := kStart; ki <= kEnd; ki++ {
+						for ti := tStart; ti <= tEnd; ti++ {
+							for vi := vStart; vi <= vEnd; vi++ {
+								for ri := rStart; ri <= rEnd; ri++ {
+									cellID := dataset.BucketIDFromCoordinates(ai, mi, ki, ti, vi, ri)
+									m := meta[cellID]
+									if m.Count == 0 {
+										continue
+									}
+
+									offset := int(m.Offset) * dataset.VectorSize
+									count := int(m.Count)
+
+									stats.processedCandidates += scanQuantizedContiguousSIMD(
+										vectors[offset:offset+count*dataset.VectorSize],
+										labels[m.Offset:m.Offset+uint32(m.Count)],
+										q0, q1, q2, q3, q4, q5, q6, q7, q8, q9, q10, q11, q12, q13, q14, q15,
+										&bestDistances,
+										&bestLabels,
+									)
+									stats.bucketsVisited++
+								}
+							}
 						}
-
-						offset := int(meta.Offset) * dataset.VectorSize
-						count := int(meta.Count)
-
-						stats.processedCandidates += scanQuantizedContiguousSIMD(
-							vectors[offset:offset+count*dataset.VectorSize],
-							labels[meta.Offset:meta.Offset+meta.Count],
-							q0, q1, q2, q3, q4, q5, q6, q7, q8, q9, q10, q11, q12, q13, q14, q15,
-							&bestDistances,
-							&bestLabels,
-						)
-						stats.bucketsVisited++
 					}
 				}
 			}
+
+			earlyExit := cfg.bucketEarlyExitCandidates
+			if earlyExit <= 0 {
+				earlyExit = 128
+			}
+			if stats.processedCandidates >= cfg.bucketTargetCandidates || (radius >= 2 && stats.processedCandidates >= earlyExit) {
+				break
+			}
 		}
 	} else if len(store.BucketIndex) > 0 {
-		for amountIndex := amountStart; amountIndex <= amountEnd; amountIndex++ {
-			for hourIndex := hourStart; hourIndex <= hourEnd; hourIndex++ {
-				for dayIndex := dayStart; dayIndex <= dayEnd; dayIndex++ {
-					for txIndex := txStart; txIndex <= txEnd; txIndex++ {
-						bucketID := dataset.BucketIDFromCoordinates(amountIndex, hourIndex, dayIndex, txIndex)
-						stats.processedCandidates += scanQuantizedCandidates(
-							store.BucketIndex[bucketID],
-							vectors,
-							labels,
-							q0, q1, q2, q3, q4, q5, q6, q7, q8, q9, q10, q11, q12, q13, q14, q15,
-							&bestDistances,
-							&bestLabels,
-						)
-						stats.bucketsVisited++
+		bucketIndex := store.BucketIndex
+		for radius := 0; radius <= cfg.bucketMaxSearchRadius; radius++ {
+			aStart := bucketRangeStart(amountBucket, dataset.AmountBucketCount, radius)
+			aEnd := bucketRangeEnd(amountBucket, dataset.AmountBucketCount, radius)
+			mStart := bucketRangeStart(minutesBucket, dataset.MinutesSinceLastCount, radius)
+			mEnd := bucketRangeEnd(minutesBucket, dataset.MinutesSinceLastCount, radius)
+			kStart := bucketRangeStart(kmHomeBucket, dataset.KMFromHomeCount, radius)
+			kEnd := bucketRangeEnd(kmHomeBucket, dataset.KMFromHomeCount, radius)
+			tStart := bucketRangeStart(txCountBucket, dataset.Tx24hBucketCount, radius)
+			tEnd := bucketRangeEnd(txCountBucket, dataset.Tx24hBucketCount, radius)
+			vStart := bucketRangeStart(amountVsAvgBucket, dataset.AmountVsAvgBucketCount, radius)
+			vEnd := bucketRangeEnd(amountVsAvgBucket, dataset.AmountVsAvgBucketCount, radius)
+			rStart := bucketRangeStart(mccRiskBucket, dataset.MCCRiskBucketCount, radius)
+			rEnd := bucketRangeEnd(mccRiskBucket, dataset.MCCRiskBucketCount, radius)
+
+			for ai := aStart; ai <= aEnd; ai++ {
+				for mi := mStart; mi <= mEnd; mi++ {
+					for ki := kStart; ki <= kEnd; ki++ {
+						for ti := tStart; ti <= tEnd; ti++ {
+							for vi := vStart; vi <= vEnd; vi++ {
+								for ri := rStart; ri <= rEnd; ri++ {
+									cellID := dataset.BucketIDFromCoordinates(ai, mi, ki, ti, vi, ri)
+									stats.processedCandidates += scanQuantizedCandidates(
+										bucketIndex[cellID],
+										vectors,
+										labels,
+										q0, q1, q2, q3, q4, q5, q6, q7, q8, q9, q10, q11, q12, q13, q14, q15,
+										&bestDistances,
+										&bestLabels,
+									)
+									stats.bucketsVisited++
+								}
+							}
+						}
 					}
 				}
+			}
+
+			earlyExit := cfg.bucketEarlyExitCandidates
+			if earlyExit <= 0 {
+				earlyExit = 128
+			}
+			if stats.processedCandidates >= cfg.bucketTargetCandidates || (radius >= 2 && stats.processedCandidates >= earlyExit) {
+				break
 			}
 		}
 	} else {
@@ -247,22 +424,7 @@ func scanQuantizedCandidates(
 	candidateIDs []uint32,
 	vectors []uint16,
 	labels []byte,
-	q0 int32,
-	q1 int32,
-	q2 int32,
-	q3 int32,
-	q4 int32,
-	q5 int32,
-	q6 int32,
-	q7 int32,
-	q8 int32,
-	q9 int32,
-	q10 int32,
-	q11 int32,
-	q12 int32,
-	q13 int32,
-	q14 int32,
-	q15 int32,
+	q0, q1, q2, q3, q4, q5, q6, q7, q8, q9, q10, q11, q12, q13, q14, q15 int32,
 	bestDistances *[topK]uint64,
 	bestLabels *[topK]byte,
 ) int {
@@ -271,7 +433,6 @@ func scanQuantizedCandidates(
 		baseOffset := int(vectorIndex) * dataset.VectorSize
 		ptr := (*[16]uint16)(unsafe.Pointer(&vectors[baseOffset]))
 
-		// Stage 1: Dimensions 0-3
 		d0 := q0 - int32(ptr[0])
 		d1 := q1 - int32(ptr[1])
 		d2 := q2 - int32(ptr[2])
@@ -286,7 +447,6 @@ func scanQuantizedCandidates(
 			continue
 		}
 
-		// Stage 2: Dimensions 4-7
 		d4 := q4 - int32(ptr[4])
 		d5 := q5 - int32(ptr[5])
 		d6 := q6 - int32(ptr[6])
@@ -301,7 +461,6 @@ func scanQuantizedCandidates(
 			continue
 		}
 
-		// Stage 3: Dimensions 8-11
 		d8 := q8 - int32(ptr[8])
 		d9 := q9 - int32(ptr[9])
 		d10 := q10 - int32(ptr[10])
@@ -316,7 +475,6 @@ func scanQuantizedCandidates(
 			continue
 		}
 
-		// Stage 4: Dimensions 12-15
 		d12 := q12 - int32(ptr[12])
 		d13 := q13 - int32(ptr[13])
 		d14 := q14 - int32(ptr[14])
@@ -339,47 +497,43 @@ func scanQuantizedCandidates(
 func selectBucketWindow(
 	bucketIndex [][]uint32,
 	bucketPrefixSums []uint32,
-	amountBucket int,
-	hourBucket int,
-	dayBucket int,
-	tx24hBucket int,
+	amountBucket, minutesBucket, kmHomeBucket, tx24hBucket, amountVsAvgBucket, mccRiskBucket int,
 	cfg searchConfig,
-) (amountStart int, amountEnd int, hourStart int, hourEnd int, dayStart int, dayEnd int, txStart int, txEnd int, candidateCount int) {
+) (aStart, aEnd, mStart, mEnd, kStart, kEnd, tStart, tEnd, vStart, vEnd, rStart, rEnd int, candidateCount int) {
 	for radius := 0; radius <= cfg.bucketMaxSearchRadius; radius++ {
-		amountStart = bucketRangeStart(amountBucket, dataset.AmountBucketCount, radius)
-		amountEnd = bucketRangeEnd(amountBucket, dataset.AmountBucketCount, radius)
-		hourStart = bucketRangeStart(hourBucket, dataset.HourBucketCount, radius)
-		hourEnd = bucketRangeEnd(hourBucket, dataset.HourBucketCount, radius)
-		dayStart = bucketRangeStart(dayBucket, dataset.DayBucketCount, radius)
-		dayEnd = bucketRangeEnd(dayBucket, dataset.DayBucketCount, radius)
-		txStart = bucketRangeStart(tx24hBucket, dataset.Tx24hBucketCount, radius)
-		txEnd = bucketRangeEnd(tx24hBucket, dataset.Tx24hBucketCount, radius)
+		aStart = bucketRangeStart(amountBucket, dataset.AmountBucketCount, radius)
+		aEnd = bucketRangeEnd(amountBucket, dataset.AmountBucketCount, radius)
+		mStart = bucketRangeStart(minutesBucket, dataset.MinutesSinceLastCount, radius)
+		mEnd = bucketRangeEnd(minutesBucket, dataset.MinutesSinceLastCount, radius)
+		kStart = bucketRangeStart(kmHomeBucket, dataset.KMFromHomeCount, radius)
+		kEnd = bucketRangeEnd(kmHomeBucket, dataset.KMFromHomeCount, radius)
+		tStart = bucketRangeStart(tx24hBucket, dataset.Tx24hBucketCount, radius)
+		tEnd = bucketRangeEnd(tx24hBucket, dataset.Tx24hBucketCount, radius)
+		vStart = bucketRangeStart(amountVsAvgBucket, dataset.AmountVsAvgBucketCount, radius)
+		vEnd = bucketRangeEnd(amountVsAvgBucket, dataset.AmountVsAvgBucketCount, radius)
+		rStart = bucketRangeStart(mccRiskBucket, dataset.MCCRiskBucketCount, radius)
+		rEnd = bucketRangeEnd(mccRiskBucket, dataset.MCCRiskBucketCount, radius)
 
 		if len(bucketPrefixSums) > 0 {
 			candidateCount = dataset.CountBucketWindowCandidates(
 				bucketPrefixSums,
-				amountStart,
-				amountEnd,
-				hourStart,
-				hourEnd,
-				dayStart,
-				dayEnd,
-				txStart,
-				txEnd,
+				aStart, aEnd, mStart, mEnd, kStart, kEnd, tStart, tEnd, vStart, vEnd, rStart, rEnd,
 			)
 		} else if len(bucketIndex) > 0 {
 			candidateCount = 0
-			for amountIndex := amountStart; amountIndex <= amountEnd; amountIndex++ {
-				for hourIndex := hourStart; hourIndex <= hourEnd; hourIndex++ {
-					for dayIndex := dayStart; dayIndex <= dayEnd; dayIndex++ {
-						for txIndex := txStart; txIndex <= txEnd; txIndex++ {
-							candidateCount += len(bucketIndex[dataset.BucketIDFromCoordinates(amountIndex, hourIndex, dayIndex, txIndex)])
+			for ai := aStart; ai <= aEnd; ai++ {
+				for mi := mStart; mi <= mEnd; mi++ {
+					for ki := kStart; ki <= kEnd; ki++ {
+						for ti := tStart; ti <= tEnd; ti++ {
+							for vi := vStart; vi <= vEnd; vi++ {
+								for ri := rStart; ri <= rEnd; ri++ {
+									candidateCount += len(bucketIndex[dataset.BucketIDFromCoordinates(ai, mi, ki, ti, vi, ri)])
+								}
+							}
 						}
 					}
 				}
 			}
-		} else {
-			candidateCount = 0
 		}
 
 		earlyExit := cfg.bucketEarlyExitCandidates
@@ -387,11 +541,11 @@ func selectBucketWindow(
 			earlyExit = 128
 		}
 		if candidateCount >= cfg.bucketTargetCandidates || (radius >= 2 && candidateCount >= earlyExit) {
-			return amountStart, amountEnd, hourStart, hourEnd, dayStart, dayEnd, txStart, txEnd, candidateCount
+			return
 		}
 	}
 
-	return amountStart, amountEnd, hourStart, hourEnd, dayStart, dayEnd, txStart, txEnd, candidateCount
+	return
 }
 
 func bucketRangeStart(center int, bucketCount int, radius int) int {
@@ -430,7 +584,6 @@ func scanQuantizedContiguous(
 		baseOffset := i * dataset.VectorSize
 		ptr := (*[16]uint16)(unsafe.Pointer(&vectors[baseOffset]))
 
-		// Stage 1: Dimensions 0-3
 		d0 := q0 - int32(ptr[0])
 		d1 := q1 - int32(ptr[1])
 		d2 := q2 - int32(ptr[2])
@@ -445,7 +598,6 @@ func scanQuantizedContiguous(
 			continue
 		}
 
-		// Stage 2: Dimensions 4-7
 		d4 := q4 - int32(ptr[4])
 		d5 := q5 - int32(ptr[5])
 		d6 := q6 - int32(ptr[6])
@@ -460,7 +612,6 @@ func scanQuantizedContiguous(
 			continue
 		}
 
-		// Stage 3: Dimensions 8-11
 		d8 := q8 - int32(ptr[8])
 		d9 := q9 - int32(ptr[9])
 		d10 := q10 - int32(ptr[10])
@@ -475,7 +626,6 @@ func scanQuantizedContiguous(
 			continue
 		}
 
-		// Stage 4: Dimensions 12-15
 		d12 := q12 - int32(ptr[12])
 		d13 := q13 - int32(ptr[13])
 		d14 := q14 - int32(ptr[14])
@@ -494,4 +644,3 @@ func scanQuantizedContiguous(
 
 	return count
 }
-

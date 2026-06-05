@@ -393,11 +393,32 @@ func loadMappedQuantizedVectorStore(path string, header binaryHeader) (*VectorSt
 	var bucketMeta []BucketMetadata
 
 	if header.Version >= 5 {
-		metaCount := BucketIndexCount
-		metaSize := metaCount * binary.Size(BucketMetadata{})
-		metaBytes := mappedData[labelsOffset : labelsOffset+metaSize]
-		bucketMeta = unsafe.Slice((*BucketMetadata)(unsafe.Pointer(&metaBytes[0])), metaCount)
-		labelsOffset += metaSize
+		var metaCount int
+		if header.Version >= 6 {
+			metaCount = BucketIndexCount
+			metaSize := metaCount * binary.Size(BucketMetadata{})
+			metaBytes := mappedData[labelsOffset : labelsOffset+metaSize]
+			bucketMeta = unsafe.Slice((*BucketMetadata)(unsafe.Pointer(&metaBytes[0])), metaCount)
+			labelsOffset += metaSize
+		} else {
+			metaCount = OldBucketIndexCount
+			metaSize := metaCount * binary.Size(BucketMetadataV5{})
+			metaBytes := mappedData[labelsOffset : labelsOffset+metaSize]
+			v5Meta := unsafe.Slice((*BucketMetadataV5)(unsafe.Pointer(&metaBytes[0])), metaCount)
+			bucketMeta = make([]BucketMetadata, metaCount)
+			for i, v5 := range v5Meta {
+				count16 := uint16(v5.Count)
+				if v5.Count > 65535 {
+					count16 = 65535
+				}
+				bucketMeta[i] = BucketMetadata{
+					Offset:     v5.Offset,
+					Count:      count16,
+					FraudCount: 0,
+				}
+			}
+			labelsOffset += metaSize
+		}
 	}
 
 	vectorsOffset := labelsOffset + count
@@ -425,72 +446,6 @@ func loadMappedQuantizedVectorStore(path string, header binaryHeader) (*VectorSt
 	}
 	BuildBucketIndex(store)
 	return store, nil
-}
-
-func buildBucketPrefixSumsFromMeta(meta []BucketMetadata) []uint32 {
-	prefixAmountBucketCount := AmountBucketCount + 1
-	prefixHourBucketCount := HourBucketCount + 1
-	prefixDayBucketCount := DayBucketCount + 1
-	prefixTx24hBucketCount := Tx24hBucketCount + 1
-
-	prefixSums := make([]uint32, prefixAmountBucketCount*prefixHourBucketCount*prefixDayBucketCount*prefixTx24hBucketCount)
-
-	for amountIndex := 0; amountIndex < AmountBucketCount; amountIndex++ {
-		for hourIndex := 0; hourIndex < HourBucketCount; hourIndex++ {
-			for dayIndex := 0; dayIndex < DayBucketCount; dayIndex++ {
-				for txIndex := 0; txIndex < Tx24hBucketCount; txIndex++ {
-					bucketID := (((amountIndex*HourBucketCount)+hourIndex)*DayBucketCount+dayIndex)*Tx24hBucketCount + txIndex
-					prefixSums[prefixIndex(amountIndex+1, hourIndex+1, dayIndex+1, txIndex+1)] = meta[bucketID].Count
-				}
-			}
-		}
-	}
-
-	for amountIndex := 1; amountIndex <= AmountBucketCount; amountIndex++ {
-		for hourIndex := 1; hourIndex <= HourBucketCount; hourIndex++ {
-			for dayIndex := 1; dayIndex <= DayBucketCount; dayIndex++ {
-				for txIndex := 1; txIndex <= Tx24hBucketCount; txIndex++ {
-					index := prefixIndex(amountIndex, hourIndex, dayIndex, txIndex)
-					prefixSums[index] += prefixSums[prefixIndex(amountIndex-1, hourIndex, dayIndex, txIndex)]
-				}
-			}
-		}
-	}
-
-	for amountIndex := 0; amountIndex <= AmountBucketCount; amountIndex++ {
-		for hourIndex := 1; hourIndex <= HourBucketCount; hourIndex++ {
-			for dayIndex := 1; dayIndex <= DayBucketCount; dayIndex++ {
-				for txIndex := 1; txIndex <= Tx24hBucketCount; txIndex++ {
-					index := prefixIndex(amountIndex, hourIndex, dayIndex, txIndex)
-					prefixSums[index] += prefixSums[prefixIndex(amountIndex, hourIndex-1, dayIndex, txIndex)]
-				}
-			}
-		}
-	}
-
-	for amountIndex := 0; amountIndex <= AmountBucketCount; amountIndex++ {
-		for hourIndex := 0; hourIndex <= HourBucketCount; hourIndex++ {
-			for dayIndex := 1; dayIndex <= DayBucketCount; dayIndex++ {
-				for txIndex := 1; txIndex <= Tx24hBucketCount; txIndex++ {
-					index := prefixIndex(amountIndex, hourIndex, dayIndex, txIndex)
-					prefixSums[index] += prefixSums[prefixIndex(amountIndex, hourIndex, dayIndex-1, txIndex)]
-				}
-			}
-		}
-	}
-
-	for amountIndex := 0; amountIndex <= AmountBucketCount; amountIndex++ {
-		for hourIndex := 0; hourIndex <= HourBucketCount; hourIndex++ {
-			for dayIndex := 0; dayIndex <= DayBucketCount; dayIndex++ {
-				for txIndex := 1; txIndex <= Tx24hBucketCount; txIndex++ {
-					index := prefixIndex(amountIndex, hourIndex, dayIndex, txIndex)
-					prefixSums[index] += prefixSums[prefixIndex(amountIndex, hourIndex, dayIndex, txIndex-1)]
-				}
-			}
-		}
-	}
-
-	return prefixSums
 }
 
 func bytesAsUint16(data []byte) []uint16 {

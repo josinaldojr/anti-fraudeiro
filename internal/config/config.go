@@ -53,7 +53,7 @@ func Load() Config {
 		GCPercent:                  envIntOrDefault("GC_PERCENT", 500),
 		MemoryLimitMiB:             envInt64OrDefault("MEMORY_LIMIT_MIB", 0),
 		MaxConcurrentFraudRequests: envIntOrDefault("MAX_CONCURRENT_FRAUD_REQUESTS", 0),
-		BucketTargetCandidates:     envIntOrDefault("BUCKET_TARGET_CANDIDATES", 256),
+		BucketTargetCandidates:     envIntOrDefault("BUCKET_TARGET_CANDIDATES", 448),
 		BucketMaxSearchRadius:      envIntOrDefault("BUCKET_MAX_SEARCH_RADIUS", 3),
 	}
 }

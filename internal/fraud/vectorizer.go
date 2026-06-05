@@ -47,8 +47,6 @@ func NewVectorizer(normalization config.Normalization, mccRisk map[string]float3
 func (v *Vectorizer) Vectorize(request FraudScoreRequest) ([16]float32, error) {
 	var vector [16]float32
 
-	requestedAt := request.Transaction.RequestedAt.Time()
-
 	vector[0] = clamp(request.Transaction.Amount * v.maxAmountInv)
 	vector[1] = clamp(float64(request.Transaction.Installments) * v.maxInstallmentsInv)
 
@@ -58,14 +56,14 @@ func (v *Vectorizer) Vectorize(request FraudScoreRequest) ([16]float32, error) {
 	}
 	vector[2] = clamp((request.Transaction.Amount / customerAverage) * v.amountVsAvgRatioInv)
 
-	vector[3] = float32(requestedAt.Hour()) / 23.0
-	vector[4] = float32(weekdayIndex(requestedAt)) / 6.0
+	vector[3] = float32(request.Transaction.RequestedAt.Hour()) / 23.0
+	vector[4] = float32(request.Transaction.RequestedAt.Weekday()) / 6.0
 
 	if request.LastTransaction == nil {
 		vector[5] = -1
 		vector[6] = -1
 	} else {
-		minutesSinceLast := float64(request.Transaction.RequestedAt.UnixNano()-request.LastTransaction.Timestamp.UnixNano()) / float64(time.Minute)
+		minutesSinceLast := float64(request.Transaction.RequestedAt.UnixNano()-request.LastTransaction.Timestamp.UnixNano()) / 60000000000
 		vector[5] = clamp(minutesSinceLast * v.maxMinutesInv)
 		vector[6] = clamp(request.LastTransaction.KMFromCurrent * v.maxKMInv)
 	}

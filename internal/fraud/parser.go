@@ -73,7 +73,7 @@ func parseObjectInternal(data []byte, request *FraudScoreRequest, prefix string)
 		case "":
 			switch key {
 			case "id":
-				request.ID = bytesToString(value)
+				request.ID = string(value)
 			case "transaction":
 				if err := parseObjectInternal(value, request, "transaction"); err != nil {
 					return err
@@ -129,9 +129,9 @@ func parseObjectInternal(data []byte, request *FraudScoreRequest, prefix string)
 		case "merchant":
 			switch key {
 			case "id":
-				request.Merchant.ID = bytesToString(value)
+				request.Merchant.ID = string(value)
 			case "mcc":
-				request.Merchant.MCC = bytesToString(value)
+				request.Merchant.MCC = string(value)
 			case "avg_amount":
 				request.Merchant.AvgAmount = fastParseFloat(value)
 			}
@@ -273,7 +273,7 @@ func parseStringArray(data []byte, slice *[]string) error {
 		data = data[valueEnd:]
 
 		if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
-			*slice = append(*slice, bytesToString(value[1:len(value)-1]))
+			*slice = append(*slice, string(value[1:len(value)-1]))
 		}
 	}
 

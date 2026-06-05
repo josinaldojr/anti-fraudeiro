@@ -126,6 +126,48 @@ func BenchmarkFindTop5RealDataset(b *testing.B) {
 	}
 }
 
+func BenchmarkExactScanScalarRealDataset(b *testing.B) {
+	b.ReportAllocs()
+
+	store, query := loadBenchmarkRealDataset(b)
+	defer store.Close()
+	b.ResetTimer()
+
+	for b.Loop() {
+		_ = exactScanScalar(query, store)
+	}
+}
+
+func BenchmarkExactScanSIMDRealDataset(b *testing.B) {
+	b.ReportAllocs()
+
+	store, query := loadBenchmarkRealDataset(b)
+	defer store.Close()
+	b.ResetTimer()
+
+	for b.Loop() {
+		_ = exactScanSIMD(query, store)
+	}
+}
+
+func loadBenchmarkRealDataset(b *testing.B) (*dataset.VectorStore, [16]float32) {
+	b.Helper()
+
+	referencesPath := filepath.Join("..", "..", "resources", dataset.BinaryReferenceFile)
+	if _, err := os.Stat(referencesPath); err != nil {
+		b.Skipf("real dataset not available: %v", err)
+	}
+
+	store, err := dataset.LoadVectorStore(referencesPath)
+	if err != nil {
+		b.Fatalf("LoadVectorStore returned error: %v", err)
+	}
+
+	vectorizer := newTestVectorizer()
+	query, _ := vectorizer.Vectorize(sampleRequest())
+	return store, query
+}
+
 func parseTimestampWithTimeParse(value string) (Timestamp, error) {
 	parsed, err := time.Parse(time.RFC3339, value)
 	if err != nil {

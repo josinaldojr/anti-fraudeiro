@@ -23,8 +23,8 @@ func TestLoadUsesPerformanceTunedDefaults(t *testing.T) {
 	if cfg.MemoryLimitMiB != 0 {
 		t.Fatalf("MemoryLimitMiB = %d, want 0", cfg.MemoryLimitMiB)
 	}
-	if cfg.BucketTargetCandidates != 256 {
-		t.Fatalf("BucketTargetCandidates = %d, want 256", cfg.BucketTargetCandidates)
+	if cfg.BucketTargetCandidates != 448 {
+		t.Fatalf("BucketTargetCandidates = %d, want 448", cfg.BucketTargetCandidates)
 	}
 	if cfg.BucketMaxSearchRadius != 3 {
 		t.Fatalf("BucketMaxSearchRadius = %d, want 3", cfg.BucketMaxSearchRadius)
