@@ -1,7 +1,7 @@
 services:
   haproxy:
     image: haproxy:3.0-alpine
-    platform: linux/amd64 # Target platform required by Rinha
+    platform: linux/amd64
     depends_on:
       - api1
       - api2
@@ -10,18 +10,18 @@ services:
     volumes:
       - ./docker/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
     cpus: 0.20
-    mem_limit: 20m
+    mem_limit: 30m
     deploy:
       resources:
         limits:
           cpus: "0.20"
-          memory: 20M
+          memory: 30M
     networks:
       - anti-fraudeiro
 
   api1:
     image: ghcr.io/josinaldojr/anti-fraudeiro:latest
-    platform: linux/amd64 # Target platform required by Rinha
+    platform: linux/amd64
     ports:
       - "8081:8080"
     environment:
@@ -30,21 +30,21 @@ services:
       GC_PERCENT: "${GC_PERCENT:-500}"
       MEMORY_LIMIT_MIB: "${MEMORY_LIMIT_MIB:-0}"
       MAX_CONCURRENT_FRAUD_REQUESTS: "${MAX_CONCURRENT_FRAUD_REQUESTS:-0}"
-      BUCKET_TARGET_CANDIDATES: "${BUCKET_TARGET_CANDIDATES:-256}"
+      BUCKET_TARGET_CANDIDATES: "${BUCKET_TARGET_CANDIDATES:-448}"
       BUCKET_MAX_SEARCH_RADIUS: "${BUCKET_MAX_SEARCH_RADIUS:-3}"
     cpus: 0.40
-    mem_limit: 165m
+    mem_limit: 160m
     deploy:
       resources:
         limits:
           cpus: "0.40"
-          memory: 165M
+          memory: 160M
     networks:
       - anti-fraudeiro
 
   api2:
     image: ghcr.io/josinaldojr/anti-fraudeiro:latest
-    platform: linux/amd64 # Target platform required by Rinha
+    platform: linux/amd64
     ports:
       - "8082:8080"
     environment:
@@ -53,15 +53,15 @@ services:
       GC_PERCENT: "${GC_PERCENT:-500}"
       MEMORY_LIMIT_MIB: "${MEMORY_LIMIT_MIB:-0}"
       MAX_CONCURRENT_FRAUD_REQUESTS: "${MAX_CONCURRENT_FRAUD_REQUESTS:-0}"
-      BUCKET_TARGET_CANDIDATES: "${BUCKET_TARGET_CANDIDATES:-256}"
+      BUCKET_TARGET_CANDIDATES: "${BUCKET_TARGET_CANDIDATES:-448}"
       BUCKET_MAX_SEARCH_RADIUS: "${BUCKET_MAX_SEARCH_RADIUS:-3}"
     cpus: 0.40
-    mem_limit: 165m
+    mem_limit: 160m
     deploy:
       resources:
         limits:
           cpus: "0.40"
-          memory: 165M
+          memory: 160M
     networks:
       - anti-fraudeiro
 
